@@ -5,11 +5,18 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
+	"time"
 )
+
+type matching struct {
+	Ride     *Ride
+	Chair    *Chair
+	Distance int
+}
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 func internalGetMatching(w http.ResponseWriter, r *http.Request) {
-	// MEMO: 一旦最も待たせているリクエストに適当な空いている椅子マッチさせる実装とする。おそらくもっといい方法があるはず…
 	rides := []*Ride{}
 	if err := db.Select(&rides, `SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at`); err != nil {
 		if errors.Is(err, sql.ErrNoRows) || len(rides) == 0 {
@@ -22,36 +29,59 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("rides for waiting", "count", len(rides))
 
-	for _, ride := range rides {
-		matched := &Chair{}
-		empty := false
-		for i := 0; i < 10; i++ {
-			if err := db.Get(matched, "SELECT * FROM chairs INNER JOIN (SELECT id FROM chairs WHERE is_active = TRUE ORDER BY RAND() LIMIT 1) AS tmp ON chairs.id = tmp.id LIMIT 1"); err != nil {
-				if errors.Is(err, sql.ErrNoRows) {
-					w.WriteHeader(http.StatusNoContent)
-					return
-				}
-				writeError(w, http.StatusInternalServerError, err)
-			}
-
-			if err := db.Get(&empty, "SELECT COUNT(*) = 0 FROM (SELECT COUNT(chair_sent_at) = 6 AS completed FROM ride_statuses WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = ?) GROUP BY ride_id) is_completed WHERE completed = FALSE", matched.ID); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			if empty {
-				break
-			}
-		}
-		if !empty {
+	chairs := []*Chair{}
+	if err := db.Select(&chairs, `SELECT * FROM chairs WHERE is_active = TRUE AND latitude IS NOT NULL AND NOT EXISTS (
+  SELECT 1
+  FROM ride_statuses
+  WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = chairs.id)
+  GROUP BY ride_id
+  HAVING COUNT(chair_sent_at) < 6
+)`); err != nil {
+		if errors.Is(err, sql.ErrNoRows) || len(chairs) == 0 {
+			slog.Info("no active chairs", "err", err)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		slog.Info("matched", "ride", ride.ID, "chair", matched.ID)
-		if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", matched.ID, ride.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	slog.Info("active chairs", "count", len(chairs))
+
+	//chairとrideのマッチングをするためにまず全部の距離を求めてしまう
+	matchings := []matching{}
+	for _, chair := range chairs {
+		for _, ride := range rides {
+			// ここで距離を計算しておく
+			distance := calculateDistance(*chair.Latitude, *chair.Longitude, ride.PickupLatitude, ride.PickupLongitude)
+			matchings = append(matchings, matching{Ride: ride, Chair: chair, Distance: distance})
+		}
+	}
+	// 距離が近い順に並べる
+	sort.SliceStable(matchings, func(i, j int) bool {
+		return matchings[i].Distance < matchings[j].Distance
+	})
+	matchedRides := map[string]bool{}
+	matchedChairs := map[string]bool{}
+
+	cutoff := time.Now().Add(-time.Second * 2) // 2秒前
+	for _, m := range matchings {
+		if matchedRides[m.Ride.ID] || matchedChairs[m.Chair.ID] {
+			continue
+		}
+		if m.Distance > 25 && m.Ride.CreatedAt.After(cutoff) {
+			// 25m以上離れていて、かつ2秒以内に作られたライドは一旦スキップ
+			continue
+		}
+		matchedRides[m.Ride.ID] = true
+		matchedChairs[m.Chair.ID] = true
+		slog.Info("matched", "ride", m.Ride.ID, "chair", m.Chair.ID)
+		if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 	}
+	notMatchedRidesCount := len(rides) - len(matchedRides)
+	slog.Info("not matched rides", "count", notMatchedRidesCount)
 
 	w.WriteHeader(http.StatusNoContent)
 }
