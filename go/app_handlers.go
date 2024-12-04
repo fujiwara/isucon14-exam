@@ -838,11 +838,11 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 	}{}
 	err = db.Select(
 		&chairs,
-		`SELECT chairs.id, name, model, latitude, longitude, ride_id AS ride_id FROM chairs
-		LEFT JOIN (SELECT max(id) as ride_id, chair_id FROM rides GROUP BY chair_id) AS rides ON chairs.id = rides.chair_id
-		WHERE is_active = 1
-		AND abs(latitude - ?) + abs(longitude - ?) <= ?
-		AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+		`SELECT chairs.id, name, model, latitude, longitude, ride_id FROM chairs
+			LEFT JOIN (SELECT id as ride_id, chair_id FROM rides WHERE evaluation IS NULL) AS rides ON chairs.id = rides.chair_id
+			WHERE is_active = 1
+			AND abs(latitude - ?) + abs(longitude - ?) <= ?
+			AND latitude IS NOT NULL AND longitude IS NOT NULL`,
 		lat, lon, distance,
 	)
 	if err != nil {

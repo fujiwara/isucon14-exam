@@ -101,6 +101,7 @@ CREATE TABLE rides
 
 CREATE INDEX rides_chair_id_index ON rides (chair_id, updated_at);
 CREATE INDEX rides_user_id_index ON rides (user_id, created_at);
+CREATE INDEX rides_evaluation_index ON rides (evaluation);
 
 DROP TABLE IF EXISTS ride_statuses;
 CREATE TABLE ride_statuses
