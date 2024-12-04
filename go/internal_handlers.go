@@ -62,8 +62,9 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	})
 	matchedRides := map[string]bool{}
 	matchedChairs := map[string]bool{}
+	comletedMatchings := []matching{}
 
-	cutoff := time.Now().Add(-time.Second * 2) // 2秒前
+	cutoff := time.Now().Add(-time.Second * 1) // 2秒前
 	for _, m := range matchings {
 		if matchedRides[m.Ride.ID] || matchedChairs[m.Chair.ID] {
 			continue
@@ -74,11 +75,29 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		}
 		matchedRides[m.Ride.ID] = true
 		matchedChairs[m.Chair.ID] = true
-		slog.Info("matched", "ride", m.Ride.ID, "chair", m.Chair.ID)
-		if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
+		comletedMatchings = append(comletedMatchings, m)
+	}
+	if len(comletedMatchings) == 0 {
+		slog.Info("no matched rides")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	tx, err := db.Beginx()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx.Rollback()
+	for _, m := range comletedMatchings {
+		slog.Info("matched", "ride", m.Ride.ID, "chair", m.Chair.ID, "distance", m.Distance, "age", time.Since(m.Ride.CreatedAt))
+		if _, err := tx.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
 	}
 	notMatchedRidesCount := len(rides) - len(matchedRides)
 	slog.Info("not matched rides", "count", notMatchedRidesCount)
