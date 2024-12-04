@@ -69,7 +69,7 @@ func appPostUsers(w http.ResponseWriter, r *http.Request) {
 	if req.InvitationCode != nil && *req.InvitationCode != "" {
 		// 招待する側の招待数をチェック
 		var coupons []Coupon
-		err = tx.Select(&coupons, "SELECT * FROM coupons WHERE code = ? FOR UPDATE", "INV_"+*req.InvitationCode)
+		err = tx.Select(&coupons, "SELECT * FROM coupons WHERE code = ? AND user_id = ? FOR UPDATE", "INV_"+*req.InvitationCode, userID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return

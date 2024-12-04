@@ -144,5 +144,4 @@ CREATE TABLE coupons
   PRIMARY KEY (user_id, code)
 )
   COMMENT 'クーポンテーブル';
-CREATE INDEX coupons_user_id_index ON coupons (user_id, created_at);
 CREATE INDEX coupons_used_by_index ON coupons (used_by);

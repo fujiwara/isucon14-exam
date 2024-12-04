@@ -109,27 +109,20 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 
 	now := time.Now()
-	chairLocationID := ulid.Make().String()
-	if _, err := tx.Exec(
-		`INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?)`,
-		chairLocationID, chair.ID, req.Latitude, req.Longitude, now,
-	); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	distance := 0
+	if chair.Latitude != nil && chair.Longitude != nil {
+		distance = calculateDistance(*chair.Latitude, *chair.Longitude, req.Latitude, req.Longitude)
 	}
+	// updated_at を更新しないで前と同じ値にすること
 	if _, err := tx.Exec(
-		`UPDATE chairs SET latitude = ?, longitude = ?, updated_at = ? WHERE id = ?`,
-		req.Latitude, req.Longitude, chair.UpdatedAt, chair.ID, // updated_at を更新しないで前と同じ値にする
+		`UPDATE chairs SET latitude = ?, longitude = ?, total_distance = total_distance + ?, moved_at = ?, updated_at = ? WHERE id = ?`,
+		req.Latitude, req.Longitude, distance, now, chair.UpdatedAt, chair.ID,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
 	location := &ChairLocation{
-		ID:        chairLocationID,
-		ChairID:   chair.ID,
-		Latitude:  req.Latitude,
-		Longitude: req.Longitude,
 		CreatedAt: now.Truncate(time.Millisecond),
 	}
 
@@ -227,7 +220,7 @@ func chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := &User{}
-	err = tx.Get(user, "SELECT * FROM users WHERE id = ? FOR SHARE", ride.UserID)
+	err = tx.Get(user, "SELECT * FROM users WHERE id = ?", ride.UserID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

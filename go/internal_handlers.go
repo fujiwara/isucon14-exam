@@ -64,13 +64,17 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	matchedChairs := map[string]bool{}
 	comletedMatchings := []matching{}
 
-	cutoff := time.Now().Add(-time.Second * 1) // 2秒前
+	cutoff := time.Now().Add(-time.Second * 1) // 1秒前
 	for _, m := range matchings {
 		if matchedRides[m.Ride.ID] || matchedChairs[m.Chair.ID] {
 			continue
 		}
 		if m.Distance > 25 && m.Ride.CreatedAt.After(cutoff) {
-			// 25m以上離れていて、かつ2秒以内に作られたライドは一旦スキップ
+			// 25m以上離れていて、かつ1秒以内に作られたライドは一旦スキップ
+			continue
+		}
+		if m.Distance > 100 {
+			// 100m以上離れているものはマッチングしない
 			continue
 		}
 		matchedRides[m.Ride.ID] = true
