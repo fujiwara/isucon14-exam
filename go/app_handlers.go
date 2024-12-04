@@ -844,7 +844,7 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 	chairs := []Chair{}
 	err = tx.Select(
 		&chairs,
-		`SELECT * FROM chairs`,
+		`SELECT id, name, model FROM chairs WHERE is_active = 1`,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -853,10 +853,6 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
-		if !chair.IsActive {
-			continue
-		}
-
 		ride := &Ride{}
 		if err := tx.Get(
 			ride,
@@ -907,15 +903,7 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	retrievedAt := &time.Time{}
-	err = tx.Get(
-		retrievedAt,
-		`SELECT CURRENT_TIMESTAMP(6)`,
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+	retrievedAt := time.Now()
 
 	writeJSON(w, http.StatusOK, &appGetNearbyChairsResponse{
 		Chairs:      nearbyChairs,
