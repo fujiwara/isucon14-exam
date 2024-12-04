@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 )
@@ -107,19 +108,22 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 
+	now := time.Now()
 	chairLocationID := ulid.Make().String()
 	if _, err := tx.Exec(
-		`INSERT INTO chair_locations (id, chair_id, latitude, longitude) VALUES (?, ?, ?, ?)`,
-		chairLocationID, chair.ID, req.Latitude, req.Longitude,
+		`INSERT INTO chair_locations (id, chair_id, latitude, longitude, created_at) VALUES (?, ?, ?, ?, ?)`,
+		chairLocationID, chair.ID, req.Latitude, req.Longitude, now,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	location := &ChairLocation{}
-	if err := tx.Get(location, `SELECT * FROM chair_locations WHERE id = ?`, chairLocationID); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	location := &ChairLocation{
+		ID:        chairLocationID,
+		ChairID:   chair.ID,
+		Latitude:  req.Latitude,
+		Longitude: req.Longitude,
+		CreatedAt: now.Truncate(time.Millisecond),
 	}
 
 	ride := &Ride{}
