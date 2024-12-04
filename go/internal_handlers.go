@@ -82,7 +82,6 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		comletedMatchings = append(comletedMatchings, m)
 	}
 	if len(comletedMatchings) == 0 {
-		slog.Info("no matched rides")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -103,8 +102,6 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	notMatchedRidesCount := len(rides) - len(matchedRides)
-	slog.Info("not matched rides", "count", notMatchedRidesCount)
-
+	slog.Info("matched", "count", len(comletedMatchings))
 	w.WriteHeader(http.StatusNoContent)
 }

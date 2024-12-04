@@ -832,19 +832,16 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	coordinate := Coordinate{Latitude: lat, Longitude: lon}
-
-	tx, err := db.Beginx()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer tx.Rollback()
-
-	chairs := []Chair{}
-	err = tx.Select(
+	chairs := []struct {
+		Chair
+		RideID sql.NullString `db:"ride_id"`
+	}{}
+	err = db.Select(
 		&chairs,
-		`SELECT id, name, model, latitude, longitude FROM chairs WHERE is_active = 1`,
+		`SELECT chairs.id, name, model, latitude, longitude, null AS ride_id FROM chairs WHERE is_active = 1
+		AND abs(latitude - ?) + abs(longitude - ?) <= ?
+		AND latitude IS NOT NULL AND longitude IS NOT NULL`,
+		lat, lon, distance,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -853,41 +850,15 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
-		ride := &Ride{}
-		if err := tx.Get(
-			ride,
-			`SELECT * FROM rides WHERE chair_id = ? ORDER BY created_at DESC LIMIT 1`,
-			chair.ID,
-		); err != nil {
-			if !errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-		} else {
-			// 過去にライドが存在し、かつ、それが完了していない場合はスキップ
-			status, err := getLatestRideStatus(tx, ride.ID)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			if status != "COMPLETED" {
-				continue
-			}
-		}
-		if chair.Latitude == nil || chair.Longitude == nil {
-			continue
-		}
-		if calculateDistance(coordinate.Latitude, coordinate.Longitude, *chair.Latitude, *chair.Longitude) <= distance {
-			nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
-				ID:    chair.ID,
-				Name:  chair.Name,
-				Model: chair.Model,
-				CurrentCoordinate: Coordinate{
-					Latitude:  *chair.Latitude,
-					Longitude: *chair.Longitude,
-				},
-			})
-		}
+		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
+			ID:    chair.ID,
+			Name:  chair.Name,
+			Model: chair.Model,
+			CurrentCoordinate: Coordinate{
+				Latitude:  *chair.Latitude,
+				Longitude: *chair.Longitude,
+			},
+		})
 	}
 
 	retrievedAt := time.Now()
