@@ -117,6 +117,13 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if _, err := tx.Exec(
+		`UPDATE chairs SET latitude = ?, longitude = ?, updated_at = ? WHERE id = ?`,
+		req.Latitude, req.Longitude, chair.UpdatedAt, chair.ID, // updated_at を更新しないで前と同じ値にする
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	location := &ChairLocation{
 		ID:        chairLocationID,
