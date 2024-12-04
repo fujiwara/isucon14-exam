@@ -838,7 +838,9 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 	}{}
 	err = db.Select(
 		&chairs,
-		`SELECT chairs.id, name, model, latitude, longitude, null AS ride_id FROM chairs WHERE is_active = 1
+		`SELECT chairs.id, name, model, latitude, longitude, ride_id AS ride_id FROM chairs
+		LEFT JOIN (SELECT max(id) as ride_id, chair_id FROM rides GROUP BY chair_id) AS rides ON chairs.id = rides.chair_id
+		WHERE is_active = 1
 		AND abs(latitude - ?) + abs(longitude - ?) <= ?
 		AND latitude IS NOT NULL AND longitude IS NOT NULL`,
 		lat, lon, distance,
@@ -850,6 +852,17 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
+		if chair.RideID.Valid {
+			status, err := getLatestRideStatus(db, chair.RideID.String)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			if status != "COMPLETED" {
+				continue
+			}
+		}
+
 		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
 			ID:    chair.ID,
 			Name:  chair.Name,

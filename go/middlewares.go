@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"sync"
 )
+
+var sessionCache = sync.Map{}
 
 func appAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -15,6 +18,12 @@ func appAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		accessToken := c.Value
+		if u, ok := sessionCache.Load(accessToken); ok {
+			ctx := context.WithValue(r.Context(), "user", u.(*User))
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
 		user := &User{}
 		err = db.Get(user, "SELECT * FROM users WHERE access_token = ?", accessToken)
 		if err != nil {
@@ -25,11 +34,14 @@ func appAuthMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		sessionCache.Store(accessToken, user)
 
 		ctx := context.WithValue(r.Context(), "user", user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+var ownerSessionCache = sync.Map{}
 
 func ownerAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +51,12 @@ func ownerAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		accessToken := c.Value
+		if u, ok := ownerSessionCache.Load(accessToken); ok {
+			ctx := context.WithValue(r.Context(), "owner", u.(*Owner))
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
 		owner := &Owner{}
 		if err := db.Get(owner, "SELECT * FROM owners WHERE access_token = ?", accessToken); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
@@ -48,6 +66,8 @@ func ownerAuthMiddleware(next http.Handler) http.Handler {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+
+		ownerSessionCache.Store(accessToken, owner)
 
 		ctx := context.WithValue(r.Context(), "owner", owner)
 		next.ServeHTTP(w, r.WithContext(ctx))
@@ -62,6 +82,7 @@ func chairAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		accessToken := c.Value
+
 		chair := &Chair{}
 		err = db.Get(chair, "SELECT * FROM chairs WHERE access_token = ?", accessToken)
 		if err != nil {

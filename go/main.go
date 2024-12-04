@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -138,6 +139,9 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	sessionCache = sync.Map{}
+	ownerSessionCache = sync.Map{}
 
 	writeJSON(w, http.StatusOK, postInitializeResponse{Language: "go"})
 }
