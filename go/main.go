@@ -146,6 +146,9 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 	ownerSessionCache = sync.Map{}
 	chairChannels = sync.Map{}
 	usersMinimalCache = sync.Map{}
+	chairsInRide = sync.Map{}
+	appChannels = sync.Map{}
+	chairChannels = sync.Map{}
 
 	writeJSON(w, http.StatusOK, postInitializeResponse{Language: "go"})
 }
