@@ -12,9 +12,12 @@ import (
 )
 
 type matching struct {
-	Ride     *Ride
-	Chair    *Chair
-	Distance int
+	Ride  *Ride
+	Chair *Chair
+	Score float64
+	PD    int
+	DD    int
+	Age   float64
 }
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
@@ -49,34 +52,44 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("active chairs", "count", len(chairs))
 
-	//chairとrideのマッチングをするためにまず全部の距離を求めてしまう
+	//chairとrideのマッチングをするためにスコアを計算
 	matchings := []matching{}
 	for _, chair := range chairs {
 		for _, ride := range rides {
-			// ここで距離を計算しておく
-			distance := calculateDistance(*chair.Latitude, *chair.Longitude, ride.PickupLatitude, ride.PickupLongitude)
-			matchings = append(matchings, matching{Ride: ride, Chair: chair, Distance: distance})
+			pickupDistance := calculateDistance(*chair.Latitude, *chair.Longitude, ride.PickupLatitude, ride.PickupLongitude)
+			destinationDistance := calculateDistance(ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
+			age := time.Since(ride.CreatedAt).Seconds()
+			var score float64
+			// pickupDistanceは少ないほどよい
+			if pickupDistance == 0 {
+				score += 25
+			} else {
+				score += 25 / float64(pickupDistance)
+			}
+			// destinationDistanceは多いほどよい
+			score += float64(destinationDistance) / 10
+			// ageは少ないほどよい
+			score += 10 / age
+			matchings = append(matchings, matching{
+				Ride: ride, Chair: chair, Score: score,
+				PD: pickupDistance, DD: destinationDistance, Age: age,
+			})
 		}
 	}
-	// 距離が近い順に並べる
+	// スコアが高い順に並び替え
 	sort.SliceStable(matchings, func(i, j int) bool {
-		return matchings[i].Distance < matchings[j].Distance
+		return matchings[i].Score > matchings[j].Score
 	})
 	matchedRides := map[string]bool{}
 	matchedChairs := map[string]bool{}
 	comletedMatchings := []matching{}
 
-	cutoff := time.Now().Add(-time.Second * 1) // 1秒前
 	for _, m := range matchings {
 		if matchedRides[m.Ride.ID] || matchedChairs[m.Chair.ID] {
 			continue
 		}
-		if m.Distance > 25 && m.Ride.CreatedAt.After(cutoff) {
-			// 25m以上離れていて1秒以内に作られたライドは一旦スキップ
-			continue
-		}
-		if m.Distance > 100 {
-			// 100m以上離れているものはマッチングしない
+		if m.PD > 100 {
+			// 遠すぎる
 			continue
 		}
 		matchedRides[m.Ride.ID] = true
@@ -96,7 +109,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, m := range chunk {
-			slog.Info("matched", "ride", m.Ride.ID, "chair", m.Chair.ID, "distance", m.Distance, "age", time.Since(m.Ride.CreatedAt))
+			slog.Info("matched", "score", m.Score, "pd", m.PD, "dd", m.DD, "age", m.Age, "ride_id", m.Ride.ID, "chair_id", m.Chair.ID)
 			if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
