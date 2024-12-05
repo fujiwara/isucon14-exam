@@ -308,6 +308,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	newStatus := ""
 	switch req.Status {
 	// Acknowledge the ride
 	case "ENROUTE":
@@ -315,6 +316,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		newStatus = "ENROUTE"
 	// After Picking up user
 	case "CARRYING":
 		status, err := getLatestRideStatus(tx, ride.ID)
@@ -330,15 +332,18 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
+		newStatus = "CARRYING"
 	default:
 		writeError(w, http.StatusBadRequest, errors.New("invalid status"))
 	}
-	sendNotificationSSE(chair.ID, ride, req.Status)
-	sendNotificationSSEApp(ride.UserID, ride, req.Status)
 
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if newStatus != "" {
+		sendNotificationSSE(chair.ID, ride, req.Status)
+		sendNotificationSSEApp(ride.UserID, ride, req.Status)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
