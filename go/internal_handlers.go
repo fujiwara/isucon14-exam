@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sort"
 	"time"
+
+	"github.com/samber/lo"
 )
 
 type matching struct {
@@ -70,7 +72,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if m.Distance > 25 && m.Ride.CreatedAt.After(cutoff) {
-			// 25m以上離れていて、かつ1秒以内に作られたライドは一旦スキップ
+			// 25m以上離れていて1秒以内に作られたライドは一旦スキップ
 			continue
 		}
 		if m.Distance > 100 {
@@ -85,22 +87,26 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	tx, err := db.Beginx()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer tx.Rollback()
-	for _, m := range comletedMatchings {
-		slog.Info("matched", "ride", m.Ride.ID, "chair", m.Chair.ID, "distance", m.Distance, "age", time.Since(m.Ride.CreatedAt))
-		if _, err := tx.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
+
+	for _, chunk := range lo.Chunk(comletedMatchings, 20) {
+		notifies := map[string]notify{}
+		tx, err := db.Beginx()
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		for _, m := range chunk {
+			slog.Info("matched", "ride", m.Ride.ID, "chair", m.Chair.ID, "distance", m.Distance, "age", time.Since(m.Ride.CreatedAt))
+			if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			notifies[m.Chair.ID] = notify{Ride: m.Ride, Status: "MATCHING"}
+		}
+		tx.Commit()
+		for chairID, ns := range notifies {
+			sendNotificationSSE(chairID, ns.Ride, ns.Status)
+		}
 	}
 	slog.Info("matched", "count", len(comletedMatchings))
 	w.WriteHeader(http.StatusNoContent)

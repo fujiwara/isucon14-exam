@@ -2,9 +2,13 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
+	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
@@ -127,6 +131,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ride := &Ride{}
+	newStatus := ""
 	if err := tx.Get(ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, err)
@@ -144,6 +149,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
+				newStatus = "PICKUP"
 			}
 
 			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
@@ -151,13 +157,18 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
+				newStatus = "ARRIVED"
 			}
+
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
+	}
+	if newStatus != "" {
+		sendNotificationSSE(chair.ID, ride, newStatus)
 	}
 
 	writeJSON(w, http.StatusOK, &chairPostCoordinateResponse{
@@ -321,6 +332,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusBadRequest, errors.New("invalid status"))
 	}
+	sendNotificationSSE(chair.ID, ride, req.Status)
 
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -328,4 +340,134 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+var chairChannels = sync.Map{}
+
+type notify struct {
+	Ride   *Ride
+	Status string
+}
+
+var usersMinimalCache = sync.Map{}
+
+const chanSize = 60
+
+func sendNotificationSSE(chairID string, ride *Ride, status string) {
+	if chairID == "" {
+		panic("chairID is empty")
+	}
+	if ride == nil {
+		panic("ride is nil")
+	}
+	if status == "" {
+		panic("status is empty")
+	}
+	_ch, _ := chairChannels.LoadOrStore(chairID, make(chan notify, chanSize))
+	ch := _ch.(chan notify)
+	select {
+	case ch <- notify{Ride: ride, Status: status}:
+	default:
+		log.Println("dropped notification", chairID, ride.ID, status)
+		// non-blocking
+	}
+}
+
+func chairGetNotificationSSE(w http.ResponseWriter, r *http.Request) {
+	chair := r.Context().Value("chair").(*Chair)
+
+	_ch, _ := chairChannels.LoadOrStore(chair.ID, make(chan notify, chanSize))
+	ch := _ch.(chan notify)
+
+	// Server Sent Events
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+
+	var lastRide *Ride
+	var lastRideStatus string
+	f := func() (respond bool, err error) {
+		slog.Debug("waiting", "chair", chair.ID)
+		n := <-ch
+		slog.Debug("received", "notification", n)
+		ride := n.Ride
+		status := n.Status
+
+		if lastRide != nil && ride.ID == lastRide.ID && status == lastRideStatus {
+			return false, nil
+		}
+
+		user := &User{}
+		if u, ok := usersMinimalCache.Load(ride.UserID); ok {
+			user = u.(*User)
+		} else {
+			if err := db.Get(user, "SELECT id, firstname, lastname FROM users WHERE id = ?", ride.UserID); err != nil {
+				return false, fmt.Errorf("failed to get user id=%s: %w", ride.UserID, err)
+			}
+			usersMinimalCache.Store(ride.UserID, user)
+		}
+
+		now := time.Now()
+		if _, err := db.Exec(`UPDATE ride_statuses SET chair_sent_at = ? WHERE ride_id=? AND status=?`, now, ride.ID, status); err != nil {
+			return false, fmt.Errorf("failed to update ride_statuses: %w", err)
+		}
+
+		if err := writeSSE(w, &chairGetNotificationResponseData{
+			RideID: ride.ID,
+			User: simpleUser{
+				ID:   user.ID,
+				Name: fmt.Sprintf("%s %s", user.Firstname, user.Lastname),
+			},
+			PickupCoordinate: Coordinate{
+				Latitude:  ride.PickupLatitude,
+				Longitude: ride.PickupLongitude,
+			},
+			DestinationCoordinate: Coordinate{
+				Latitude:  ride.DestinationLatitude,
+				Longitude: ride.DestinationLongitude,
+			},
+			Status: status,
+		}); err != nil {
+			return false, fmt.Errorf("failed to writeSSE: %w", err)
+		}
+		lastRide = ride
+		lastRideStatus = status
+		return true, nil
+	}
+
+	// 初回送信を必ず行う
+	if err := writeSSE(w, nil); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to send sse at first: %w", err))
+		return
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+
+		default:
+			_, err := f()
+			if err != nil {
+				slog.Warn("failed to send sse:", "error", err)
+				return
+			}
+		}
+	}
+}
+
+func writeSSE(w http.ResponseWriter, data interface{}) error {
+	buf, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	_, err = w.Write([]byte("data: " + string(buf) + "\n\n"))
+	if err != nil {
+		return err
+	}
+
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	return nil
 }
