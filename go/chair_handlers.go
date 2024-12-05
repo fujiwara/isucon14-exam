@@ -194,7 +194,7 @@ type chairGetNotificationResponseData struct {
 	Status                string     `json:"status"`
 }
 
-func chairGetNotification(w http.ResponseWriter, r *http.Request) {
+func _chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	chair := r.Context().Value("chair").(*Chair)
 
 	tx, err := db.Beginx()
@@ -408,9 +408,8 @@ func chairGetNotificationSSE(w http.ResponseWriter, r *http.Request) {
 			usersMinimalCache.Store(ride.UserID, user)
 		}
 
-		now := time.Now()
-		if _, err := db.Exec(`UPDATE ride_statuses SET chair_sent_at = ? WHERE ride_id=? AND status=?`, now, ride.ID, status); err != nil {
-			return false, fmt.Errorf("failed to update ride_statuses: %w", err)
+		if status == "COMPLETED" {
+			chairsInRide.Delete(chair.ID)
 		}
 
 		if err := writeSSE(w, &chairGetNotificationResponseData{

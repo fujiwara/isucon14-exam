@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/samber/lo"
@@ -19,6 +20,8 @@ type matching struct {
 	DD    int
 	Age   float64
 }
+
+var chairsInRide = sync.Map{}
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 func internalGetMatching(w http.ResponseWriter, r *http.Request) {
@@ -35,13 +38,9 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	slog.Info("rides for waiting", "count", len(rides))
 
 	chairs := []*Chair{}
-	if err := db.Select(&chairs, `SELECT * FROM chairs WHERE is_active = TRUE AND latitude IS NOT NULL AND NOT EXISTS (
-  SELECT 1
-  FROM ride_statuses
-  WHERE ride_id IN (SELECT id FROM rides WHERE chair_id = chairs.id)
-  GROUP BY ride_id
-  HAVING COUNT(chair_sent_at) < 6
-)`); err != nil {
+	if err := db.Select(&chairs,
+		`SELECT * FROM chairs WHERE is_active = TRUE AND latitude IS NOT NULL`,
+	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) || len(chairs) == 0 {
 			slog.Info("no active chairs", "err", err)
 			w.WriteHeader(http.StatusNoContent)
@@ -55,6 +54,10 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	//chairとrideのマッチングをするためにスコアを計算
 	matchings := []matching{}
 	for _, chair := range chairs {
+		if _, ok := chairsInRide.Load(chair.ID); ok {
+			// ride中の椅子はスキップ
+			continue
+		}
 		for _, ride := range rides {
 			pickupDistance := calculateDistance(*chair.Latitude, *chair.Longitude, ride.PickupLatitude, ride.PickupLongitude)
 			destinationDistance := calculateDistance(ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
@@ -120,6 +123,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		for chairID, ns := range notifies {
 			sendNotificationSSE(chairID, ns.Ride, ns.Status)
 			sendNotificationSSEApp(ns.Ride.UserID, ns.Ride, ns.Status)
+			chairsInRide.Store(chairID, ns.Ride.ID)
 		}
 	}
 	slog.Info("matched", "count", len(comletedMatchings))
