@@ -169,6 +169,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	}
 	if newStatus != "" {
 		sendNotificationSSE(chair.ID, ride, newStatus)
+		sendNotificationSSEApp(ride.UserID, ride, newStatus)
 	}
 
 	writeJSON(w, http.StatusOK, &chairPostCoordinateResponse{
@@ -333,6 +334,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("invalid status"))
 	}
 	sendNotificationSSE(chair.ID, ride, req.Status)
+	sendNotificationSSEApp(ride.UserID, ride, req.Status)
 
 	if err := tx.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)

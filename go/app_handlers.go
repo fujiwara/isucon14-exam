@@ -3,8 +3,12 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -604,6 +608,7 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sendNotificationSSE(ride.ChairID.String, ride, "COMPLETED")
+	sendNotificationSSEApp(ride.UserID, ride, "COMPLETED")
 
 	writeJSON(w, http.StatusOK, &appPostRideEvaluationResponse{
 		CompletedAt: ride.UpdatedAt.UnixMilli(),
@@ -931,8 +936,33 @@ func calculateDiscountedFare(tx *sqlx.Tx, userID string, ride *Ride, pickupLatit
 	return initialFare + discountedMeteredFare, nil
 }
 
+var appChannels = sync.Map{}
+
+func sendNotificationSSEApp(userID string, ride *Ride, status string) {
+	if userID == "" {
+		panic("userID is empty")
+	}
+	if ride == nil {
+		panic("ride is nil")
+	}
+	if status == "" {
+		panic("status is empty")
+	}
+	_ch, _ := appChannels.LoadOrStore(userID, make(chan notify, chanSize))
+	ch := _ch.(chan notify)
+	select {
+	case ch <- notify{Ride: ride, Status: status}:
+	default:
+		log.Println("dropped notification", userID, ride.ID, status)
+		// non-blocking
+	}
+}
+
 func appGetNotificationSSE(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value("user").(*User)
+
+	_ch, _ := appChannels.LoadOrStore(user.ID, make(chan notify, chanSize))
+	ch := _ch.(chan notify)
 
 	// Server Sent Events
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -941,29 +971,21 @@ func appGetNotificationSSE(w http.ResponseWriter, r *http.Request) {
 	var lastRide *Ride
 	var lastRideStatus string
 	f := func() (respond bool, err error) {
+		slog.Debug("waiting", "user", user.ID)
+		n := <-ch
+		slog.Debug("received", "user notification", n)
+		ride := n.Ride
+		status := n.Status
+
+		if lastRide != nil && ride.ID == lastRide.ID && status == lastRideStatus {
+			return false, nil
+		}
+
 		tx, err := db.Beginx()
 		if err != nil {
 			return false, err
 		}
 		defer tx.Rollback()
-
-		ride := &Ride{}
-		err = tx.Get(ride, `SELECT * FROM rides WHERE user_id = ? ORDER BY created_at DESC LIMIT 1`, user.ID)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return false, nil
-			}
-			return false, err
-
-		}
-		status, err := getLatestRideStatus(tx, ride.ID)
-		if err != nil {
-			return false, err
-
-		}
-		if lastRide != nil && ride.ID == lastRide.ID && status == lastRideStatus {
-			return false, nil
-		}
 
 		fare, err := calculateDiscountedFare(tx, user.ID, ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
 		if err != nil {
@@ -1012,32 +1034,21 @@ func appGetNotificationSSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 初回送信を必ず行う
-	respond, err := f()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	if err := writeSSE(w, nil); err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to send sse at first: %w", err))
 		return
-	}
-	if !respond {
-		if err := writeSSE(w, nil); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
 	}
 
 	for {
 		select {
 		case <-r.Context().Done():
-			w.WriteHeader(http.StatusOK)
 			return
 
 		default:
-			respond, err := f()
+			_, err := f()
 			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
+				slog.Warn("failed to send sse:", "error", err)
 				return
-			}
-			if !respond {
-				time.Sleep(100 * time.Millisecond)
 			}
 		}
 	}

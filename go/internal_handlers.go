@@ -119,6 +119,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		tx.Commit()
 		for chairID, ns := range notifies {
 			sendNotificationSSE(chairID, ns.Ride, ns.Status)
+			sendNotificationSSEApp(ns.Ride.UserID, ns.Ride, ns.Status)
 		}
 	}
 	slog.Info("matched", "count", len(comletedMatchings))
