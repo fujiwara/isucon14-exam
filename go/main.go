@@ -141,6 +141,7 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	urlCache.Store("payment_gateway_url", req.PaymentServer)
 
 	sessionCache = sync.Map{}
 	ownerSessionCache = sync.Map{}

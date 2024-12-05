@@ -491,6 +491,8 @@ type appPostRideEvaluationResponse struct {
 	CompletedAt int64 `json:"completed_at"`
 }
 
+var urlCache = sync.Map{}
+
 func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 	rideID := r.PathValue("ride_id")
 
@@ -583,9 +585,14 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var paymentGatewayURL string
-	if err := tx.Get(&paymentGatewayURL, "SELECT value FROM settings WHERE name = 'payment_gateway_url'"); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	if u, ok := urlCache.Load("payment_gateway_url"); ok {
+		paymentGatewayURL = u.(string)
+	} else {
+		if err := tx.Get(&paymentGatewayURL, "SELECT value FROM settings WHERE name = 'payment_gateway_url'"); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		urlCache.Store("payment_gateway_url", paymentGatewayURL)
 	}
 
 	if err := requestPaymentGatewayPostPayment(paymentGatewayURL, paymentToken.Token, paymentGatewayRequest, func() ([]Ride, error) {

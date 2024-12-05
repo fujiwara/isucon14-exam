@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -20,11 +21,16 @@ type paymentGatewayGetPaymentsResponseOne struct {
 	Status string `json:"status"`
 }
 
+var paymentSem = make(chan struct{}, 2)
+
 func requestPaymentGatewayPostPayment(paymentGatewayURL string, token string, param *paymentGatewayPostPaymentRequest, retrieveRidesOrderByCreatedAtAsc func() ([]Ride, error)) error {
 	b, err := json.Marshal(param)
 	if err != nil {
 		return err
 	}
+	// 2つまでのリクエストを同時に送る
+	paymentSem <- struct{}{}
+	defer func() { <-paymentSem }()
 
 	// 失敗したらとりあえずリトライ
 	// FIXME: 社内決済マイクロサービスのインフラに異常が発生していて、同時にたくさんリクエストすると変なことになる可能性あり
@@ -84,6 +90,7 @@ func requestPaymentGatewayPostPayment(paymentGatewayURL string, token string, pa
 			if retry < 5 {
 				retry++
 				time.Sleep(100 * time.Millisecond)
+				slog.Warn("failed to request to payment gateway", "retry", retry, "err", err)
 				continue
 			} else {
 				return err
