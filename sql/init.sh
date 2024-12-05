@@ -17,27 +17,37 @@ ISUCON_DB_USER=${ISUCON_DB_USER:-isucon}
 ISUCON_DB_PASSWORD=${ISUCON_DB_PASSWORD:-isucon}
 ISUCON_DB_NAME=${ISUCON_DB_NAME:-isuride}
 
+for host in $ISUCON_DB_HOST $ISUCON_DB_HOST2; do
+
 # MySQLを初期化
 mysql -u"$ISUCON_DB_USER" \
 		-p"$ISUCON_DB_PASSWORD" \
-		--host "$ISUCON_DB_HOST" \
+		--host "$host" \
 		--port "$ISUCON_DB_PORT" \
 		"$ISUCON_DB_NAME" < 1-schema.sql
 
 mysql -u"$ISUCON_DB_USER" \
 		-p"$ISUCON_DB_PASSWORD" \
-		--host "$ISUCON_DB_HOST" \
+		--host "$host" \
 		--port "$ISUCON_DB_PORT" \
 		"$ISUCON_DB_NAME" < 2-master-data.sql
 
 gzip -dkc 3-initial-data.sql.gz | mysql -u"$ISUCON_DB_USER" \
 		-p"$ISUCON_DB_PASSWORD" \
-		--host "$ISUCON_DB_HOST" \
+		--host "$host" \
 		--port "$ISUCON_DB_PORT" \
 		"$ISUCON_DB_NAME"
 
 mysql -u"$ISUCON_DB_USER" \
 		-p"$ISUCON_DB_PASSWORD" \
-		--host "$ISUCON_DB_HOST" \
+		--host "$host" \
 		--port "$ISUCON_DB_PORT" \
 		"$ISUCON_DB_NAME" < 5.sql
+done
+
+# 1からはride_statusesテーブルを削除
+echo "DROP TABLE ride_statuses" | mysql -u"$ISUCON_DB_USER" \
+		-p"$ISUCON_DB_PASSWORD" \
+		--host "$ISUCON_DB_HOST" \
+		--port "$ISUCON_DB_PORT" \
+		"$ISUCON_DB_NAME"

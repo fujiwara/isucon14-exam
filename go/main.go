@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -18,7 +19,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-var db *sqlx.DB
+var db, db2 *sqlx.DB
 
 func main() {
 	mux := setup()
@@ -67,6 +68,14 @@ func setup() http.Handler {
 	}
 	db = _db
 	db.SetMaxOpenConns(1000)
+
+	dbConfig.Addr = net.JoinHostPort(os.Getenv("ISUCON_DB_HOST2"), "3306")
+	_db2, err := sqlx.Connect("mysql", dbConfig.FormatDSN())
+	if err != nil {
+		panic(err)
+	}
+	db2 = _db2
+	db2.SetMaxOpenConns(1000)
 
 	mux := chi.NewRouter()
 	//mux.Use(middleware.Logger)
@@ -126,6 +135,7 @@ type postInitializeResponse struct {
 }
 
 func postInitialize(w http.ResponseWriter, r *http.Request) {
+	slog.Info("starting initialize")
 	req := &postInitializeRequest{}
 	if err := bindJSON(r, req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -141,8 +151,8 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	urlCache.Store("payment_gateway_url", req.PaymentServer)
-
+	chairSessionCache = sync.Map{}
+	urlCache = sync.Map{}
 	sessionCache = sync.Map{}
 	ownerSessionCache = sync.Map{}
 	chairChannels = sync.Map{}
@@ -151,6 +161,9 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 	appChannels = sync.Map{}
 	chairChannels = sync.Map{}
 
+	time.Sleep(time.Second)
+
+	slog.Info("initialize done")
 	writeJSON(w, http.StatusOK, postInitializeResponse{Language: "go"})
 }
 

@@ -26,7 +26,7 @@ var chairsInRide = sync.Map{}
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	rides := []*Ride{}
-	if err := db.Select(&rides, `SELECT * FROM rides WHERE chair_id IS NULL ORDER BY created_at`); err != nil {
+	if err := db.Select(&rides, `SELECT * FROM rides WHERE chair_id IS NULL ORDER BY id`); err != nil {
 		if errors.Is(err, sql.ErrNoRows) || len(rides) == 0 {
 			slog.Info("no rides for waiting", "err", err)
 			w.WriteHeader(http.StatusNoContent)
@@ -104,6 +104,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	matchedCount := 0
 	for _, chunk := range lo.Chunk(comletedMatchings, 20) {
 		notifies := map[string]notify{}
 		tx, err := db.Beginx()
@@ -118,12 +119,16 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			notifies[m.Chair.ID] = notify{Ride: m.Ride, Status: "MATCHING"}
+			matchedCount++
 		}
 		tx.Commit()
 		for chairID, ns := range notifies {
 			sendNotificationSSE(chairID, ns.Ride, ns.Status)
 			sendNotificationSSEApp(ns.Ride.UserID, ns.Ride, ns.Status)
 			chairsInRide.Store(chairID, ns.Ride.ID)
+		}
+		if matchedCount >= 50 {
+			break
 		}
 	}
 	slog.Info("matched", "count", len(comletedMatchings))

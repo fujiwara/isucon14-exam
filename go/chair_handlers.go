@@ -111,6 +111,12 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	tx2, err := db2.Beginx()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx2.Rollback()
 
 	now := time.Now()
 	distance := 0
@@ -138,14 +144,14 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		status, err := getLatestRideStatus(tx, ride.ID)
+		status, err := getLatestRideStatus(tx2, ride.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		if status != "COMPLETED" && status != "CANCELED" {
 			if req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude && status == "ENROUTE" {
-				if _, err := tx.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "PICKUP"); err != nil {
+				if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "PICKUP"); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
@@ -153,7 +159,7 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
-				if _, err := tx.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ARRIVED"); err != nil {
+				if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ARRIVED"); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
@@ -167,6 +173,11 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if err := tx2.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	if newStatus != "" {
 		sendNotificationSSE(chair.ID, ride, newStatus)
 		sendNotificationSSEApp(ride.UserID, ride, newStatus)
@@ -203,6 +214,13 @@ func _chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	tx2, err := db2.Beginx()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx2.Rollback()
+
 	ride := &Ride{}
 	yetSentRideStatus := RideStatus{}
 	status := ""
@@ -216,9 +234,9 @@ func _chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Get(&yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY created_at ASC LIMIT 1`, ride.ID); err != nil {
+	if err := tx2.Get(&yetSentRideStatus, `SELECT * FROM ride_statuses WHERE ride_id = ? AND chair_sent_at IS NULL ORDER BY id ASC LIMIT 1`, ride.ID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			status, err = getLatestRideStatus(tx, ride.ID)
+			status, err = getLatestRideStatus(tx2, ride.ID)
 			if err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
@@ -239,7 +257,7 @@ func _chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if yetSentRideStatus.ID != "" {
-		_, err := tx.Exec(`UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?`, yetSentRideStatus.ID)
+		_, err := tx2.Exec(`UPDATE ride_statuses SET chair_sent_at = CURRENT_TIMESTAMP(6) WHERE id = ?`, yetSentRideStatus.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -247,6 +265,10 @@ func _chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := tx2.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -292,6 +314,12 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	tx2, err := db2.Beginx()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer tx2.Rollback()
 
 	ride := &Ride{}
 	if err := tx.Get(ride, "SELECT * FROM rides WHERE id = ? FOR UPDATE", rideID); err != nil {
@@ -312,14 +340,14 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	switch req.Status {
 	// Acknowledge the ride
 	case "ENROUTE":
-		if _, err := tx.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ENROUTE"); err != nil {
+		if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ENROUTE"); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		newStatus = "ENROUTE"
 	// After Picking up user
 	case "CARRYING":
-		status, err := getLatestRideStatus(tx, ride.ID)
+		status, err := getLatestRideStatus(tx2, ride.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -328,7 +356,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("chair has not arrived yet"))
 			return
 		}
-		if _, err := tx.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "CARRYING"); err != nil {
+		if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "CARRYING"); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -341,6 +369,11 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if err := tx2.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	if newStatus != "" {
 		sendNotificationSSE(chair.ID, ride, req.Status)
 		sendNotificationSSEApp(ride.UserID, ride, req.Status)
