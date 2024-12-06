@@ -146,9 +146,9 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			sendNotificationSSEApp(ns.Ride.UserID, ns.Ride, ns.Status)
 			chairsInRide.Store(chairID, ns.Ride)
 		}
-		if matchedCount >= 150 {
-			break
-		}
+		//if matchedCount >= 150 {
+		//	break
+		//}
 	}
 	slog.Info("count", "matched", matchedCount, "remaining", len(rides)-matchedCount)
 	w.WriteHeader(http.StatusNoContent)
