@@ -74,9 +74,9 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 				score += 25 / float64(pickupDistance)
 			}
 			// destinationDistanceは多いほどよい
-			score += float64(destinationDistance) / 10
-			// ageは少ないほどよい
-			score += 10 / age
+			//		score += float64(destinationDistance) / 10
+			// ageが古いやつから優先
+			score += 10 * age
 			// score *= float64(chair.Speed) // 速いやつをどんどん使うパターaン
 
 			if age > 20 {
