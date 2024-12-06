@@ -23,4 +23,7 @@ UPDATE chairs SET
     latitude = (SELECT latitude FROM chair_locations WHERE chair_locations.chair_id = chairs.id ORDER BY created_at DESC LIMIT 1),
     longitude = (SELECT longitude FROM chair_locations WHERE chair_locations.chair_id = chairs.id ORDER BY created_at DESC LIMIT 1),
     moved_at = (SELECT created_at FROM chair_locations WHERE chair_locations.chair_id = chairs.id ORDER BY created_at DESC LIMIT 1);
-    
+
+ALTER TABLE ride_statuses DROP COLUMN id;
+ALTER TABLE ride_statuses DROP COLUMN chair_sent_at;
+ALTER TABLE ride_statuses DROP COLUMN app_sent_at;

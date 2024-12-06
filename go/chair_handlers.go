@@ -214,14 +214,14 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		}
 		if status != "COMPLETED" && status != "CANCELED" {
 			if req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude && status == "ENROUTE" {
-				if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "PICKUP"); err != nil {
+				if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "PICKUP"); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
 				newStatus = "PICKUP"
 			}
 			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
-				if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ARRIVED"); err != nil {
+				if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "ARRIVED"); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
@@ -234,13 +234,13 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if newStatus != "" {
-		sendNotificationSSE(chair.ID, ride, newStatus)
-		sendNotificationSSEApp(ride.UserID, ride, newStatus)
+		go sendNotificationSSE(chair.ID, ride, newStatus)
+		go sendNotificationSSEApp(ride.UserID, ride, newStatus)
 	}
 	wg.Wait()
 
 	w.Header().Set("Content-Type", "application/json;charset=utf-8")
-	io.WriteString(w, `{"recorded_at":` + fmt.Sprint(now.UnixMilli()) + `}`)
+	io.WriteString(w, `{"recorded_at":`+fmt.Sprint(now.UnixMilli())+`}`)
 }
 
 type simpleUser struct {
@@ -260,6 +260,7 @@ type chairGetNotificationResponseData struct {
 	Status                string     `json:"status"`
 }
 
+/*
 func _chairGetNotification(w http.ResponseWriter, r *http.Request) {
 	chair := r.Context().Value("chair").(*Chair)
 
@@ -347,6 +348,7 @@ func _chairGetNotification(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
+*/
 
 type postChairRidesRideIDStatusRequest struct {
 	Status string `json:"status"`
@@ -395,7 +397,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	switch req.Status {
 	// Acknowledge the ride
 	case "ENROUTE":
-		if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ENROUTE"); err != nil {
+		if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "ENROUTE"); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -411,7 +413,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("chair has not arrived yet"))
 			return
 		}
-		if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "CARRYING"); err != nil {
+		if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "CARRYING"); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}

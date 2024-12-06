@@ -36,7 +36,6 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	slog.Info("rides for waiting", "count", len(rides))
 
 	chairs := make([]struct {
 		Chair
@@ -53,15 +52,16 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	slog.Info("active chairs", "count", len(chairs))
 
 	//chairとrideのマッチングをするためにスコアを計算
 	matchings := []matching{}
+	freeChairsCount := 0
 	for _, chair := range chairs {
 		if _, ok := chairsInRide.Load(chair.ID); ok {
 			// ride中の椅子はスキップ
 			continue
 		}
+		freeChairsCount++
 		for _, ride := range rides {
 			pickupDistance := calculateDistance(*chair.Latitude, *chair.Longitude, ride.PickupLatitude, ride.PickupLongitude)
 			destinationDistance := calculateDistance(ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
@@ -90,6 +90,8 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
+	slog.Info("count", "chairs", len(chairs), "free", freeChairsCount, "rides", len(rides))
+
 	// スコアが高い順に並び替え
 	sort.SliceStable(matchings, func(i, j int) bool {
 		return matchings[i].Score > matchings[j].Score
@@ -102,14 +104,16 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		if matchedRides[m.Ride.ID] || matchedChairs[m.Chair.ID] {
 			continue
 		}
-		if m.PD > 100 && m.Score < 10000 {
+		if m.PD > 50 && m.Score < 10000 {
 			// 遠すぎる
 			continue
 		}
-		if m.Score > 10000 && m.Speed >= 5 {
-			// どうせ待たせてるので速いやつを使うのはもったいない
-			continue
-		}
+		/*
+			if m.Score > 10000 && m.Speed >= 5 {
+				// どうせ待たせてるので速いやつを使うのはもったいない
+				continue
+			}
+		*/
 		matchedRides[m.Ride.ID] = true
 		matchedChairs[m.Chair.ID] = true
 		comletedMatchings = append(comletedMatchings, m)
@@ -146,6 +150,6 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	slog.Info("matched", "count", len(comletedMatchings))
+	slog.Info("count", "matched", matchedCount, "remaining", len(rides)-matchedCount)
 	w.WriteHeader(http.StatusNoContent)
 }

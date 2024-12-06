@@ -65,12 +65,9 @@ type Ride struct {
 }
 
 type RideStatus struct {
-	ID          string     `db:"id"`
-	RideID      string     `db:"ride_id"`
-	Status      string     `db:"status"`
-	CreatedAt   time.Time  `db:"created_at"`
-	AppSentAt   *time.Time `db:"app_sent_at"`
-	ChairSentAt *time.Time `db:"chair_sent_at"`
+	RideID    string    `db:"ride_id"`
+	Status    string    `db:"status"`
+	CreatedAt time.Time `db:"created_at"`
 }
 
 type Owner struct {
