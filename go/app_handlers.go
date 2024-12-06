@@ -203,7 +203,7 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 	rides := []Ride{}
 	if err := tx.Select(
 		&rides,
-		`SELECT * FROM rides WHERE user_id = ? ORDER BY id DESC`,
+		`SELECT * FROM rides WHERE user_id = ? AND evaluation IS NOT NULL ORDER BY id DESC`,
 		user.ID,
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -212,15 +212,6 @@ func appGetRides(w http.ResponseWriter, r *http.Request) {
 
 	items := []getAppRidesResponseItem{}
 	for _, ride := range rides {
-		status, err := getLatestRideStatus(tx2, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if status != "COMPLETED" {
-			continue
-		}
-
 		fare, err := calculateDiscountedFare(tx, user.ID, &ride, ride.PickupLatitude, ride.PickupLongitude, ride.DestinationLatitude, ride.DestinationLongitude)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -322,24 +313,11 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx2.Rollback()
 
-	rides := []Ride{}
-	if err := tx.Select(&rides, `SELECT * FROM rides WHERE user_id = ?`, user.ID); err != nil {
+	var continuingRideCount int
+	if err := tx.Get(&continuingRideCount, `SELECT count(*) FROM rides WHERE user_id = ? AND evaluation IS NULL`, user.ID); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-
-	continuingRideCount := 0
-	for _, ride := range rides {
-		status, err := getLatestRideStatus(tx2, ride.ID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-		if status != "COMPLETED" {
-			continuingRideCount++
-		}
-	}
-
 	if continuingRideCount > 0 {
 		writeError(w, http.StatusConflict, errors.New("ride already exists"))
 		return
