@@ -27,7 +27,7 @@ CREATE TABLE chairs
   id           VARCHAR(26)  NOT NULL COMMENT '椅子ID',
   owner_id     VARCHAR(26)  NOT NULL COMMENT 'オーナーID',
   name         VARCHAR(30)  NOT NULL COMMENT '椅子の名前',
-  model        TEXT         NOT NULL COMMENT '椅子のモデル',
+  model        VARCHAR(50)  NOT NULL COMMENT '椅子のモデル',
   is_active    TINYINT(1)   NOT NULL COMMENT '配椅子受付中かどうか',
   access_token VARCHAR(255) NOT NULL COMMENT 'アクセストークン',
   created_at   DATETIME(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) COMMENT '登録日時',

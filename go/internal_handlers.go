@@ -19,6 +19,7 @@ type matching struct {
 	PD    int
 	DD    int
 	Age   float64
+	Speed int
 }
 
 var chairsInRide = sync.Map{}
@@ -37,9 +38,12 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.Info("rides for waiting", "count", len(rides))
 
-	chairs := []*Chair{}
+	chairs := make([]struct {
+		Chair
+		Speed int `db:"speed"`
+	}, 0, 1000)
 	if err := db.Select(&chairs,
-		`SELECT * FROM chairs WHERE is_active = TRUE AND latitude IS NOT NULL`,
+		`SELECT *, speed FROM chairs JOIN chair_models ON (chairs.model=chair_models.name) WHERE is_active = TRUE AND latitude IS NOT NULL`,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) || len(chairs) == 0 {
 			slog.Info("no active chairs", "err", err)
@@ -73,9 +77,20 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			score += float64(destinationDistance) / 10
 			// ageは少ないほどよい
 			score += 10 / age
+
+			/*
+				totalDistance := pickupDistance + destinationDistance
+				// 遠いrideには速い椅子を割り当てるスコア調整
+				if chair.Speed > 0 {
+					score += float64(totalDistance) * float64(chair.Speed) / 10
+				}
+			*/
+			score *= float64(chair.Speed)
+
 			matchings = append(matchings, matching{
-				Ride: ride, Chair: chair, Score: score,
+				Ride: ride, Chair: &chair.Chair, Score: score,
 				PD: pickupDistance, DD: destinationDistance, Age: age,
+				Speed: chair.Speed,
 			})
 		}
 	}
@@ -113,7 +128,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, m := range chunk {
-			slog.Info("matched", "score", m.Score, "pd", m.PD, "dd", m.DD, "age", m.Age, "ride_id", m.Ride.ID, "chair_id", m.Chair.ID)
+			slog.Info("matched", "score", m.Score, "pd", m.PD, "dd", m.DD, "age", m.Age, "speed", m.Speed)
 			if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
