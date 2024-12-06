@@ -288,12 +288,20 @@ type executableGet interface {
 	Get(dest interface{}, query string, args ...interface{}) error
 }
 
-func getLatestRideStatus(tx executableGet, rideID string) (string, error) {
-	status := ""
-	if err := tx.Get(&status, `SELECT status FROM ride_status WHERE ride_id = ?`, rideID); err != nil {
-		return "", err
+var rideStatusCache = sync.Map{}
+
+type rideStatus struct {
+	RideID    string
+	Status    string
+	UpdatedAt time.Time
+}
+
+func getLatestRideStatus(_ executableGet, rideID string) (string, error) {
+	if v, ok := rideStatusCache.Load(rideID); ok {
+		return v.(rideStatus).Status, nil
+	} else {
+		return "", sql.ErrNoRows
 	}
-	return status, nil
 }
 
 func appPostRides(w http.ResponseWriter, r *http.Request) {
@@ -342,13 +350,7 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := tx2.Exec(
-		`INSERT INTO ride_status (ride_id, status) VALUES (?, ?)`,
-		rideID, "MATCHING",
-	); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+	rideStatusCache.Store(rideID, rideStatus{rideID, "MATCHING", time.Now()})
 
 	var rideCount int
 	if err := tx.Get(&rideCount, `SELECT COUNT(*) FROM rides WHERE user_id = ? `, user.ID); err != nil {
@@ -566,13 +568,7 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = tx2.Exec(
-		`UPDATE ride_status SET status=? WHERE ride_id=?`, "COMPLETED", rideID,
-	)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
+	rideStatusCache.Store(rideID, rideStatus{rideID, "COMPLETED", time.Now()})
 
 	if err := tx.Get(ride, `SELECT * FROM rides WHERE id = ?`, rideID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -689,15 +685,14 @@ func getChairStats(tx *sqlx.Tx, tx2 *sqlx.Tx, chairID string) (appGetNotificatio
 	totalEvaluation := 0.0
 	for _, ride := range rides {
 		rideStatuses := []RideStatus{}
-		err = tx2.Select(
-			&rideStatuses,
-			`SELECT ride_id, status, updated_at AS created_at FROM ride_status WHERE ride_id = ?`,
-			ride.ID,
-		)
-		if err != nil {
-			return stats, err
+		if v, ok := rideStatusCache.Load(ride.ID); ok {
+			status := v.(rideStatus)
+			rideStatuses = append(rideStatuses, RideStatus{
+				RideID:    status.RideID,
+				Status:    status.Status,
+				CreatedAt: status.UpdatedAt,
+			})
 		}
-
 		var arrivedAt, pickupedAt *time.Time
 		var isCompleted bool
 		for _, status := range rideStatuses {

@@ -214,17 +214,11 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		}
 		if status != "COMPLETED" && status != "CANCELED" {
 			if req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude && status == "ENROUTE" {
-				if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "PICKUP", ride.ID); err != nil {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
+				rideStatusCache.Store(ride.ID, rideStatus{Status: "PICKUP", UpdatedAt: time.Now()})
 				newStatus = "PICKUP"
 			}
 			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
-				if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "ARRIVED", ride.ID); err != nil {
-					writeError(w, http.StatusInternalServerError, err)
-					return
-				}
+				rideStatusCache.Store(ride.ID, rideStatus{Status: "ARRIVED", UpdatedAt: time.Now()})
 				newStatus = "ARRIVED"
 			}
 		}
@@ -281,12 +275,6 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	tx2, err := db2.Beginx()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer tx2.Rollback()
 
 	ride := &Ride{}
 	if err := tx.Get(ride, "SELECT * FROM rides WHERE id = ? FOR UPDATE", rideID); err != nil {
@@ -307,14 +295,11 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	switch req.Status {
 	// Acknowledge the ride
 	case "ENROUTE":
-		if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "ENROUTE", ride.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+		rideStatusCache.Store(ride.ID, rideStatus{Status: "ENROUTE", UpdatedAt: time.Now()})
 		newStatus = "ENROUTE"
 	// After Picking up user
 	case "CARRYING":
-		status, err := getLatestRideStatus(tx2, ride.ID)
+		status, err := getLatestRideStatus(tx, ride.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -323,20 +308,13 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("chair has not arrived yet"))
 			return
 		}
-		if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "CARRYING", ride.ID); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
+		rideStatusCache.Store(ride.ID, rideStatus{Status: "CARRYING", UpdatedAt: time.Now()})
 		newStatus = "CARRYING"
 	default:
 		writeError(w, http.StatusBadRequest, errors.New("invalid status"))
 	}
 
 	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	if err := tx2.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
