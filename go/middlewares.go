@@ -58,7 +58,7 @@ func ownerAuthMiddleware(next http.Handler) http.Handler {
 		}
 
 		owner := &Owner{}
-		if err := db.Get(owner, "SELECT * FROM owners WHERE access_token = ?", accessToken); err != nil {
+		if err := db2.Get(owner, "SELECT * FROM owners WHERE access_token = ?", accessToken); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				writeError(w, http.StatusUnauthorized, errors.New("invalid access token"))
 				return

@@ -39,7 +39,7 @@ func ownerPostOwners(w http.ResponseWriter, r *http.Request) {
 	accessToken := secureRandomStr(32)
 	chairRegisterToken := secureRandomStr(32)
 
-	_, err := db.Exec(
+	_, err := db2.Exec(
 		"INSERT INTO owners (id, name, access_token, chair_register_token) VALUES (?, ?, ?, ?)",
 		ownerID, req.Name, accessToken, chairRegisterToken,
 	)

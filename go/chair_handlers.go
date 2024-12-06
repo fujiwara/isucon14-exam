@@ -39,7 +39,7 @@ func chairPostChairs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	owner := &Owner{}
-	if err := db.Get(owner, "SELECT * FROM owners WHERE chair_register_token = ?", req.ChairRegisterToken); err != nil {
+	if err := db2.Get(owner, "SELECT * FROM owners WHERE chair_register_token = ?", req.ChairRegisterToken); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusUnauthorized, errors.New("invalid chair_register_token"))
 			return
