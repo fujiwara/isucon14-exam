@@ -11,6 +11,7 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/goccy/go-json v0.10.3 // indirect
 	github.com/samber/lo v1.47.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
 )
