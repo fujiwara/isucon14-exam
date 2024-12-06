@@ -870,24 +870,11 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tx, err := db.Beginx()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer tx.Rollback()
-	tx2, err := db2.Beginx()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	defer tx2.Rollback()
-
 	chairs := []struct {
 		Chair
 		RideID sql.NullString `db:"ride_id"`
 	}{}
-	err = tx.Select(
+	err = db.Select(
 		&chairs,
 		`SELECT chairs.id, name, model, latitude, longitude, ride_id FROM chairs
 			LEFT JOIN (SELECT id as ride_id, chair_id FROM rides WHERE evaluation IS NULL) AS rides ON chairs.id = rides.chair_id
@@ -903,17 +890,9 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
-		if chair.RideID.Valid {
-			status, err := getLatestRideStatus(tx2, chair.RideID.String)
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			if status != "COMPLETED" {
-				continue
-			}
+		if _, ok := chairsInRide.Load(chair.ID); ok {
+			continue
 		}
-
 		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
 			ID:    chair.ID,
 			Name:  chair.Name,
@@ -926,10 +905,6 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	retrievedAt := time.Now()
-
-	tx.Commit()
-	tx2.Commit()
-
 	writeJSON(w, http.StatusOK, &appGetNearbyChairsResponse{
 		Chairs:      nearbyChairs,
 		RetrievedAt: retrievedAt.UnixMilli(),
