@@ -636,7 +636,7 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-
+	chairsInRide.Delete(ride.ChairID.String)
 	sendNotificationSSE(ride.ChairID.String, ride, "COMPLETED")
 	sendNotificationSSEApp(ride.UserID, ride, "COMPLETED")
 
