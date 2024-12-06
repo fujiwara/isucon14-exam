@@ -2,16 +2,17 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/goccy/go-json"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -176,27 +177,18 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		distance = calculateDistance(*chair.Latitude, *chair.Longitude, req.Latitude, req.Longitude)
 	}
 
-	if _, err := db.Exec(
-		`UPDATE chairs SET latitude = ?, longitude = ?, total_distance = total_distance + ?, moved_at = ?, updated_at = updated_at WHERE id = ?`,
-		req.Latitude, req.Longitude, distance, now, chair.ID,
-	); err != nil {
-		slog.Error("failed to update chair location", "id", chair.ID, "err", err)
-		return
-	}
-	/*
-		_ch, _ := updateChairLocationsChs.Load(ulidMod(chair.ID, updateChairLocationsWorkers))
-		ch := _ch.(chan updateChairLocationsRequest)
-		ch <- updateChairLocationsRequest{
-			ID:        chair.ID,
-			Latitude:  req.Latitude,
-			Longitude: req.Longitude,
-			Distance:  distance,
-			Now:       now,
-		}*/
-
-	location := &ChairLocation{
-		CreatedAt: now.Truncate(time.Millisecond),
-	}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if _, err := db.Exec(
+			`UPDATE chairs SET latitude = ?, longitude = ?, total_distance = total_distance + ?, moved_at = ?, updated_at = updated_at WHERE id = ?`,
+			req.Latitude, req.Longitude, distance, now, chair.ID,
+		); err != nil {
+			slog.Error("failed to update chair location", "id", chair.ID, "err", err)
+			return
+		}
+	}()
 
 	tx2, err := db2.Beginx()
 	if err != nil {
@@ -245,10 +237,10 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		sendNotificationSSE(chair.ID, ride, newStatus)
 		sendNotificationSSEApp(ride.UserID, ride, newStatus)
 	}
+	wg.Wait()
 
-	writeJSON(w, http.StatusOK, &chairPostCoordinateResponse{
-		RecordedAt: location.CreatedAt.UnixMilli(),
-	})
+	w.Header().Set("Content-Type", "application/json;charset=utf-8")
+	io.WriteString(w, `{"recorded_at":` + fmt.Sprint(now.UnixMilli()) + `}`)
 }
 
 type simpleUser struct {
