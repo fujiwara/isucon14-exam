@@ -127,7 +127,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			sendNotificationSSEApp(ns.Ride.UserID, ns.Ride, ns.Status)
 			chairsInRide.Store(chairID, ns.Ride.ID)
 		}
-		if matchedCount >= 50 {
+		if matchedCount >= 150 {
 			break
 		}
 	}
