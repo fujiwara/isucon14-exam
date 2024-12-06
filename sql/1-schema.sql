@@ -100,8 +100,7 @@ CREATE TABLE rides
   COMMENT = 'ライド情報テーブル';
 
 CREATE INDEX rides_chair_id_index ON rides (chair_id, updated_at);
-CREATE INDEX rides_user_id_index ON rides (user_id);
-CREATE INDEX rides_evaluation_index ON rides (evaluation);
+CREATE INDEX rides_user_id_index ON rides (user_id, evaluation);
 
 DROP TABLE IF EXISTS ride_statuses;
 CREATE TABLE ride_statuses
