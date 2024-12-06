@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"log/slog"
 	"net/http"
@@ -96,6 +97,70 @@ type chairPostCoordinateResponse struct {
 	RecordedAt int64 `json:"recorded_at"`
 }
 
+type updateChairLocationsRequest struct {
+	ID        string
+	Latitude  int
+	Longitude int
+	Distance  int
+	Now       time.Time
+}
+
+var updateChairLocationsChs = sync.Map{}
+var updateChairLocationsWorkers = 0
+
+func chairLocationsUpdateWorker(n int) {
+	ch := make(chan updateChairLocationsRequest)
+	updateChairLocationsChs.Store(n, ch)
+
+WORKER:
+	for {
+		reqs := make([]updateChairLocationsRequest, 0, 100)
+		timer := time.NewTimer(100 * time.Millisecond)
+	WAIT:
+		for {
+			select {
+			case <-timer.C:
+				break WAIT
+			case r := <-ch:
+				reqs = append(reqs, r)
+			}
+			if len(reqs) >= 100 {
+				break WAIT
+			}
+		}
+		if len(reqs) == 0 {
+			continue WORKER
+		}
+		tx, _ := db.Beginx()
+		slog.Info("updating chair locations", "worker", n, "count", len(reqs))
+		for _, req := range reqs {
+			if _, err := db.Exec(
+				`UPDATE chairs SET latitude = ?, longitude = ?, total_distance = total_distance + ?, moved_at = ?, updated_at = updated_at WHERE id = ?`,
+				req.Latitude, req.Longitude, req.Distance, req.Now, req.ID,
+			); err != nil {
+				slog.Error("failed to update chair location", "id", req.ID, "err", err)
+				tx.Rollback()
+				continue WORKER
+			}
+		}
+		tx.Commit()
+	}
+}
+
+// ULIDを整数に変換してnで割った剰余を計算する
+func ulidMod(s string, n int) int {
+	id, err := ulid.ParseStrict(s)
+	if err != nil {
+		panic("not a valid ulid")
+	}
+	hasher := fnv.New64a()
+	_, err = hasher.Write(id[:])
+	if err != nil {
+		panic("failed to hash")
+	}
+	return int(hasher.Sum64() % uint64(n))
+}
+
 func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 	req := &Coordinate{}
 	if err := bindJSON(r, req); err != nil {
@@ -105,45 +170,51 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 
 	chair := r.Context().Value("chair").(*Chair)
 
-	tx, err := db.Beginx()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+	now := time.Now()
+	distance := 0
+	if chair.Latitude != nil && chair.Longitude != nil {
+		distance = calculateDistance(*chair.Latitude, *chair.Longitude, req.Latitude, req.Longitude)
+	}
+
+	if _, err := db.Exec(
+		`UPDATE chairs SET latitude = ?, longitude = ?, total_distance = total_distance + ?, moved_at = ?, updated_at = updated_at WHERE id = ?`,
+		req.Latitude, req.Longitude, distance, now, chair.ID,
+	); err != nil {
+		slog.Error("failed to update chair location", "id", chair.ID, "err", err)
 		return
 	}
-	defer tx.Rollback()
+	/*
+		_ch, _ := updateChairLocationsChs.Load(ulidMod(chair.ID, updateChairLocationsWorkers))
+		ch := _ch.(chan updateChairLocationsRequest)
+		ch <- updateChairLocationsRequest{
+			ID:        chair.ID,
+			Latitude:  req.Latitude,
+			Longitude: req.Longitude,
+			Distance:  distance,
+			Now:       now,
+		}*/
+
+	location := &ChairLocation{
+		CreatedAt: now.Truncate(time.Millisecond),
+	}
+
 	tx2, err := db2.Beginx()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
 	defer tx2.Rollback()
-
-	now := time.Now()
-	distance := 0
-	if chair.Latitude != nil && chair.Longitude != nil {
-		distance = calculateDistance(*chair.Latitude, *chair.Longitude, req.Latitude, req.Longitude)
-	}
-	// updated_at を更新しないで前と同じ値にすること
-	if _, err := tx.Exec(
-		`UPDATE chairs SET latitude = ?, longitude = ?, total_distance = total_distance + ?, moved_at = ?, updated_at = ? WHERE id = ?`,
-		req.Latitude, req.Longitude, distance, now, chair.UpdatedAt, chair.ID,
-	); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-
-	location := &ChairLocation{
-		CreatedAt: now.Truncate(time.Millisecond),
-	}
-
 	ride := &Ride{}
 	newStatus := ""
-	if err := tx.Get(ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
+	if r, ok := chairsInRide.Load(chair.ID); ok {
+		ride = r.(*Ride)
+	} else if err := db.Get(ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-	} else {
+	}
+	if ride.ID != "" {
 		status, err := getLatestRideStatus(tx2, ride.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
@@ -157,7 +228,6 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 				}
 				newStatus = "PICKUP"
 			}
-
 			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
 				if _, err := tx2.Exec("INSERT INTO ride_statuses (id, ride_id, status) VALUES (?, ?, ?)", ulid.Make().String(), ride.ID, "ARRIVED"); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
@@ -165,19 +235,12 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 				}
 				newStatus = "ARRIVED"
 			}
-
 		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
 	}
 	if err := tx2.Commit(); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-
 	if newStatus != "" {
 		sendNotificationSSE(chair.ID, ride, newStatus)
 		sendNotificationSSEApp(ride.UserID, ride, newStatus)

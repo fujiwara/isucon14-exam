@@ -23,6 +23,9 @@ var db, db2 *sqlx.DB
 
 func main() {
 	mux := setup()
+	for i := 0; i < updateChairLocationsWorkers; i++ {
+		go chairLocationsUpdateWorker(i)
+	}
 	slog.Info("Listening on :8080")
 	http.ListenAndServe(":8080", mux)
 }
@@ -160,6 +163,7 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 	chairsInRide = sync.Map{}
 	appChannels = sync.Map{}
 	chairChannels = sync.Map{}
+	chairMinimalCache = sync.Map{}
 
 	time.Sleep(time.Second)
 

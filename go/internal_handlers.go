@@ -77,15 +77,11 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			score += float64(destinationDistance) / 10
 			// ageは少ないほどよい
 			score += 10 / age
+			// score *= float64(chair.Speed) // 速いやつをどんどん使うパターaン
 
-			/*
-				totalDistance := pickupDistance + destinationDistance
-				// 遠いrideには速い椅子を割り当てるスコア調整
-				if chair.Speed > 0 {
-					score += float64(totalDistance) * float64(chair.Speed) / 10
-				}
-			*/
-			score *= float64(chair.Speed)
+			if age > 20 {
+				score += 10000 // 最優先
+			}
 
 			matchings = append(matchings, matching{
 				Ride: ride, Chair: &chair.Chair, Score: score,
@@ -106,8 +102,12 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		if matchedRides[m.Ride.ID] || matchedChairs[m.Chair.ID] {
 			continue
 		}
-		if m.PD > 100 {
+		if m.PD > 100 && m.Score < 10000 {
 			// 遠すぎる
+			continue
+		}
+		if m.Score > 10000 && m.Speed >= 5 {
+			// どうせ待たせてるので速いやつを使うのはもったいない
 			continue
 		}
 		matchedRides[m.Ride.ID] = true
@@ -140,7 +140,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		for chairID, ns := range notifies {
 			sendNotificationSSE(chairID, ns.Ride, ns.Status)
 			sendNotificationSSEApp(ns.Ride.UserID, ns.Ride, ns.Status)
-			chairsInRide.Store(chairID, ns.Ride.ID)
+			chairsInRide.Store(chairID, ns.Ride)
 		}
 		if matchedCount >= 150 {
 			break
