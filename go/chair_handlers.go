@@ -214,14 +214,14 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		}
 		if status != "COMPLETED" && status != "CANCELED" {
 			if req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude && status == "ENROUTE" {
-				if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "PICKUP"); err != nil {
+				if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "PICKUP", ride.ID); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
 				newStatus = "PICKUP"
 			}
 			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
-				if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "ARRIVED"); err != nil {
+				if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "ARRIVED", ride.ID); err != nil {
 					writeError(w, http.StatusInternalServerError, err)
 					return
 				}
@@ -307,7 +307,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	switch req.Status {
 	// Acknowledge the ride
 	case "ENROUTE":
-		if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "ENROUTE"); err != nil {
+		if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "ENROUTE", ride.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
@@ -323,7 +323,7 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("chair has not arrived yet"))
 			return
 		}
-		if _, err := tx2.Exec("INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)", ride.ID, "CARRYING"); err != nil {
+		if _, err := tx2.Exec("UPDATE ride_status SET status=? WHERE ride_id=?", "CARRYING", ride.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}

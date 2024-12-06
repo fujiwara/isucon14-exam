@@ -290,7 +290,7 @@ type executableGet interface {
 
 func getLatestRideStatus(tx executableGet, rideID string) (string, error) {
 	status := ""
-	if err := tx.Get(&status, `SELECT status FROM ride_statuses WHERE ride_id = ? ORDER BY created_at DESC LIMIT 1`, rideID); err != nil {
+	if err := tx.Get(&status, `SELECT status FROM ride_status WHERE ride_id = ?`, rideID); err != nil {
 		return "", err
 	}
 	return status, nil
@@ -343,7 +343,7 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if _, err := tx2.Exec(
-		`INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)`,
+		`INSERT INTO ride_status (ride_id, status) VALUES (?, ?)`,
 		rideID, "MATCHING",
 	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -567,8 +567,8 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_, err = tx2.Exec(
-		`INSERT INTO ride_statuses (ride_id, status) VALUES (?, ?)`,
-		rideID, "COMPLETED")
+		`UPDATE ride_status SET status=? WHERE ride_id=?`, "COMPLETED", rideID,
+	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
@@ -691,7 +691,7 @@ func getChairStats(tx *sqlx.Tx, tx2 *sqlx.Tx, chairID string) (appGetNotificatio
 		rideStatuses := []RideStatus{}
 		err = tx2.Select(
 			&rideStatuses,
-			`SELECT * FROM ride_statuses WHERE ride_id = ? ORDER BY created_at`,
+			`SELECT ride_id, status, updated_at AS created_at FROM ride_status WHERE ride_id = ?`,
 			ride.ID,
 		)
 		if err != nil {
