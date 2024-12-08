@@ -165,6 +165,7 @@ func postInitialize(w http.ResponseWriter, r *http.Request) {
 	appChannels = sync.Map{}
 	chairChannels = sync.Map{}
 	chairMinimalCache = sync.Map{}
+	rideCache = sync.Map{}
 
 	time.Sleep(time.Second)
 

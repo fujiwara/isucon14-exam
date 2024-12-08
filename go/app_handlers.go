@@ -15,6 +15,8 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
+var rideCache = sync.Map{}
+
 type appPostUsersRequest struct {
 	Username       string  `json:"username"`
 	FirstName      string  `json:"firstname"`
@@ -533,14 +535,20 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx2.Rollback()
 
-	ride := &Ride{}
-	if err := tx.Get(ride, `SELECT * FROM rides WHERE id = ?`, rideID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, errors.New("ride not found"))
+	var ride *Ride
+	if v, ok := rideCache.Load(rideID); ok {
+		ride = v.(*Ride)
+	} else {
+		ride = &Ride{}
+		if err := tx.Get(ride, `SELECT * FROM rides WHERE id = ?`, rideID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusNotFound, errors.New("ride not found"))
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		rideCache.Store(rideID, ride)
 	}
 	status, err := getLatestRideStatus(tx2, ride.ID)
 	if err != nil {
@@ -557,6 +565,7 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	rideCache.Delete(rideID)
 	result, err := tx.Exec(
 		`UPDATE rides SET evaluation = ? WHERE id = ?`,
 		req.Evaluation, rideID)
@@ -574,13 +583,18 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 
 	rideStatusCache.Store(rideID, rideStatus{rideID, "COMPLETED", time.Now()})
 
-	if err := tx.Get(ride, `SELECT * FROM rides WHERE id = ?`, rideID); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusNotFound, errors.New("ride not found"))
+	if v, ok := rideCache.Load(rideID); ok {
+		ride = v.(*Ride)
+	} else {
+		if err := tx.Get(ride, `SELECT * FROM rides WHERE id = ?`, rideID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				writeError(w, http.StatusNotFound, errors.New("ride not found"))
+				return
+			}
+			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		rideCache.Store(rideID, ride)
 	}
 
 	paymentToken := &PaymentToken{}
@@ -637,7 +651,7 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chairsInRide.Delete(ride.ChairID.String)
-	slog.Info("ride completed", "ride_id", rideID)
+	slog.Debug("ride completed", "ride_id", rideID)
 	sendNotificationSSE(ride.ChairID.String, ride, "COMPLETED")
 	sendNotificationSSEApp(ride.UserID, ride, "COMPLETED")
 
@@ -742,27 +756,26 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var chairs []*Chair
+	if v, ok := nearByChairsCache.Load("now"); ok {
+		chairs = v.([]*Chair)
+	} else {
+		writeError(w, http.StatusInternalServerError, errors.New("chairs cache is empty"))
+		return
+	}
 	/*
-		var chairs []*nearByChair
-		if cc, ok := nearByChairsCache.Load("now"); ok {
-			chairs = cc.([]*nearByChair)
-		} else {
-			writeError(w, http.StatusInternalServerError, errors.New("chairs cache is empty"))
+		chairs := make([]*Chair, 0, 1000)
+		if err := db.Select(
+			&chairs,
+			`SELECT chairs.id, name, model, latitude, longitude FROM chairs
+				WHERE is_active = 1 AND latitude IS NOT NULL
+				AND ABS(latitude - ?) + ABS(longitude - ?) <= ?`,
+			lat, lon, distance,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 	*/
-	chairs := make([]*nearByChair, 0, 1000)
-	if err := db.Select(
-		&chairs,
-		`SELECT chairs.id, name, model, latitude, longitude, ride_id FROM chairs
-			LEFT JOIN (SELECT id as ride_id, chair_id FROM rides WHERE evaluation IS NULL) AS rides ON chairs.id = rides.chair_id
-			WHERE is_active = 1 AND latitude IS NOT NULL
-			AND ABS(latitude - ?) + ABS(longitude - ?) <= ?`,
-			lat, lon, distance,
-	); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
 
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
@@ -772,9 +785,9 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		if chair.Latitude == nil || chair.Longitude == nil {
 			continue
 		}
-		/*if calculateDistance(lat, lon, *chair.Latitude, *chair.Longitude) > distance {
+		if calculateDistance(lat, lon, *chair.Latitude, *chair.Longitude) > distance {
 			continue
-		}*/
+		}
 		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
 			ID:    chair.ID,
 			Name:  chair.Name,

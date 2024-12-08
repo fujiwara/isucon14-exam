@@ -26,7 +26,7 @@ type matching struct {
 var chairsInRide = sync.Map{}
 var nearByChairsCache = sync.Map{}
 
-var ticker = time.NewTicker(10 * time.Millisecond)
+var ticker = time.NewTicker(100 * time.Millisecond)
 
 type nearByChair struct {
 	Chair
@@ -35,12 +35,10 @@ type nearByChair struct {
 
 func internalChairsCache(w http.ResponseWriter, _ *http.Request) {
 	<-ticker.C
-	chairs := make([]*nearByChair, 0, 1000)
+	chairs := make([]*Chair, 0, 1000)
 	err := db.Select(
 		&chairs,
-		`SELECT chairs.id, name, model, latitude, longitude, ride_id FROM chairs
-			LEFT JOIN (SELECT id as ride_id, chair_id FROM rides WHERE evaluation IS NULL) AS rides ON chairs.id = rides.chair_id
-			WHERE is_active = 1`,
+		`SELECT chairs.id, name, model, latitude, longitude FROM chairs WHERE is_active = 1`,
 	)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
@@ -162,7 +160,8 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		for _, m := range chunk {
 			maxAge = math.Max(maxAge, m.Age)
 			slog.Debug("matched", "score", m.Score, "pd", m.PD, "dd", m.DD, "age", m.Age, "speed", m.Speed)
-			if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
+			rideCache.Delete(m.Ride.ID)
+			if _, err := tx.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
 			}
