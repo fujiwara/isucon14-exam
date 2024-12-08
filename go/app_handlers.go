@@ -713,7 +713,6 @@ type appGetNearbyChairsResponseChair struct {
 }
 
 func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
-	time.Sleep(30 * time.Millisecond)
 	latStr := r.URL.Query().Get("latitude")
 	lonStr := r.URL.Query().Get("longitude")
 	distanceStr := r.URL.Query().Get("distance")
@@ -773,9 +772,9 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		if chair.Latitude == nil || chair.Longitude == nil {
 			continue
 		}
-		if calculateDistance(lat, lon, *chair.Latitude, *chair.Longitude) > distance {
+		/*if calculateDistance(lat, lon, *chair.Latitude, *chair.Longitude) > distance {
 			continue
-		}
+		}*/
 		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
 			ID:    chair.ID,
 			Name:  chair.Name,
