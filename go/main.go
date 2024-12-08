@@ -124,6 +124,7 @@ func setup() http.Handler {
 	// internal handlers
 	{
 		mux.HandleFunc("GET /api/internal/matching", internalGetMatching)
+		mux.HandleFunc("GET /api/internal/chairs-cache", internalChairsCache)
 	}
 
 	return mux
@@ -201,8 +202,11 @@ func writeError(w http.ResponseWriter, statusCode int, err error) {
 		return
 	}
 	w.Write(buf)
-
-	fmt.Fprintln(os.Stderr, err)
+	if statusCode >= 500 {
+		slog.Error("application", "code", statusCode, "error", err)
+	} else {
+		slog.Warn("application", "code", statusCode, "error", err)
+	}
 }
 
 func secureRandomStr(b int) string {

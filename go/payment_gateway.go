@@ -62,9 +62,9 @@ func requestPaymentGatewayPostPayment(paymentGatewayURL string, token string, pa
 			if retry < 5 {
 				retry++
 				//time.Sleep(100 * time.Millisecond)
-				slog.Warn("failed to request to payment gateway", "retry", retry, "err", err)
 				continue
 			} else {
+				slog.Error("failed to request to payment gateway", "retry", retry, "err", err)
 				return err
 			}
 		}

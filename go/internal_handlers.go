@@ -24,6 +24,32 @@ type matching struct {
 }
 
 var chairsInRide = sync.Map{}
+var nearByChairsCache = sync.Map{}
+
+var ticker = time.NewTicker(10 * time.Millisecond)
+
+type nearByChair struct {
+	Chair
+	RideID sql.NullString `db:"ride_id"`
+}
+
+func internalChairsCache(w http.ResponseWriter, _ *http.Request) {
+	<-ticker.C
+	chairs := make([]*nearByChair, 0, 1000)
+	err := db.Select(
+		&chairs,
+		`SELECT chairs.id, name, model, latitude, longitude, ride_id FROM chairs
+			LEFT JOIN (SELECT id as ride_id, chair_id FROM rides WHERE evaluation IS NULL) AS rides ON chairs.id = rides.chair_id
+			WHERE is_active = 1`,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	nearByChairsCache.Store("now", chairs)
+	slog.Info("cached", "chairs", len(chairs))
+	w.WriteHeader(http.StatusNoContent)
+}
 
 // このAPIをインスタンス内から一定間隔で叩かせることで、椅子とライドをマッチングさせる
 func internalGetMatching(w http.ResponseWriter, r *http.Request) {

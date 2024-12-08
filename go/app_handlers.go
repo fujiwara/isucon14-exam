@@ -676,22 +676,21 @@ type appGetNotificationResponseChairStats struct {
 func getChairStats(tx *sqlx.Tx, tx2 *sqlx.Tx, chairID string) (appGetNotificationResponseChairStats, error) {
 	stats := appGetNotificationResponseChairStats{}
 
-	rides := []Ride{}
-	err := tx.Select(
-		&rides,
-		`SELECT * FROM rides WHERE chair_id = ? AND evaluation IS NOT NULL ORDER BY updated_at DESC`,
+	var result struct {
+		TotalRidesCount    int     `db:"c"`
+		TotalEvaluationAvg float64 `db:"s"`
+	}
+	err := tx.Get(
+		&result,
+		`SELECT count(*) as c, ifnull(sum(evaluation),0) as s FROM rides WHERE chair_id = ? AND evaluation IS NOT NULL`,
 		chairID,
 	)
 	if err != nil {
 		return stats, err
 	}
 
-	totalRideCount := 0
-	totalEvaluation := 0.0
-	for _, ride := range rides {
-		totalRideCount++
-		totalEvaluation += float64(*ride.Evaluation)
-	}
+	totalRideCount := result.TotalRidesCount
+	totalEvaluation := result.TotalEvaluationAvg
 
 	stats.TotalRidesCount = totalRideCount
 	if totalRideCount > 0 {
@@ -714,6 +713,7 @@ type appGetNearbyChairsResponseChair struct {
 }
 
 func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
+	time.Sleep(30 * time.Millisecond)
 	latStr := r.URL.Query().Get("latitude")
 	lonStr := r.URL.Query().Get("longitude")
 	distanceStr := r.URL.Query().Get("distance")
@@ -743,21 +743,24 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	retrievedAt := time.Now()
-	chairs := []struct {
-		Chair
-		RideID sql.NullString `db:"ride_id"`
-	}{}
-	err = db.Select(
+	/*
+		var chairs []*nearByChair
+		if cc, ok := nearByChairsCache.Load("now"); ok {
+			chairs = cc.([]*nearByChair)
+		} else {
+			writeError(w, http.StatusInternalServerError, errors.New("chairs cache is empty"))
+			return
+		}
+	*/
+	chairs := make([]*nearByChair, 0, 1000)
+	if err := db.Select(
 		&chairs,
 		`SELECT chairs.id, name, model, latitude, longitude, ride_id FROM chairs
 			LEFT JOIN (SELECT id as ride_id, chair_id FROM rides WHERE evaluation IS NULL) AS rides ON chairs.id = rides.chair_id
-			WHERE is_active = 1
-			AND abs(latitude - ?) + abs(longitude - ?) <= ?
-			AND latitude IS NOT NULL AND longitude IS NOT NULL`,
-		lat, lon, distance,
-	)
-	if err != nil {
+			WHERE is_active = 1 AND latitude IS NOT NULL
+			AND ABS(latitude - ?) + ABS(longitude - ?) <= ?`,
+			lat, lon, distance,
+	); err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
@@ -765,6 +768,12 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
 		if _, ok := chairsInRide.Load(chair.ID); ok {
+			continue
+		}
+		if chair.Latitude == nil || chair.Longitude == nil {
+			continue
+		}
+		if calculateDistance(lat, lon, *chair.Latitude, *chair.Longitude) > distance {
 			continue
 		}
 		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
@@ -778,6 +787,7 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	retrievedAt := time.Now()
 	writeJSON(w, http.StatusOK, &appGetNearbyChairsResponse{
 		Chairs:      nearbyChairs,
 		RetrievedAt: retrievedAt.UnixMilli(),
