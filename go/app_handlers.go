@@ -290,7 +290,7 @@ type executableGet interface {
 	Get(dest interface{}, query string, args ...interface{}) error
 }
 
-var rideStatusCache = sync.Map{}
+// var rideStatusCache = sync.Map{}
 
 type rideStatus struct {
 	RideID    string
@@ -298,12 +298,12 @@ type rideStatus struct {
 	UpdatedAt time.Time
 }
 
-func getLatestRideStatus(_ executableGet, rideID string) (string, error) {
-	if v, ok := rideStatusCache.Load(rideID); ok {
-		return v.(rideStatus).Status, nil
-	} else {
-		return "", sql.ErrNoRows
+func getLatestRideStatus(tx executableGet, rideID string) (string, error) {
+	var s string
+	if err := tx.Get(&s, `SELECT status FROM ride_status WHERE ride_id = ?`, rideID); err != nil {
+		return "", err
 	}
+	return s, nil
 }
 
 func appPostRides(w http.ResponseWriter, r *http.Request) {
@@ -352,7 +352,11 @@ func appPostRides(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rideStatusCache.Store(rideID, rideStatus{rideID, "MATCHING", time.Now()})
+	// rideStatusCache.Store(rideID, rideStatus{rideID, "MATCHING", time.Now()})
+	if _, err := tx2.Exec(`INSERT INTO ride_status (ride_id, status) VALUES (?, 'MATCHING')`, rideID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	var rideCount int
 	if err := tx.Get(&rideCount, `SELECT COUNT(*) FROM rides WHERE user_id = ? `, user.ID); err != nil {
@@ -581,7 +585,11 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rideStatusCache.Store(rideID, rideStatus{rideID, "COMPLETED", time.Now()})
+	// rideStatusCache.Store(rideID, rideStatus{rideID, "COMPLETED", time.Now()})
+	if _, err := tx2.Exec(`UPDATE ride_status SET status = 'COMPLETED' WHERE ride_id = ?`, rideID); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	if v, ok := rideCache.Load(rideID); ok {
 		ride = v.(*Ride)
@@ -756,26 +764,26 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var chairs []*Chair
-	if v, ok := nearByChairsCache.Load("now"); ok {
-		chairs = v.([]*Chair)
-	} else {
-		writeError(w, http.StatusInternalServerError, errors.New("chairs cache is empty"))
-		return
-	}
 	/*
-		chairs := make([]*Chair, 0, 1000)
-		if err := db.Select(
-			&chairs,
-			`SELECT chairs.id, name, model, latitude, longitude FROM chairs
-				WHERE is_active = 1 AND latitude IS NOT NULL
-				AND ABS(latitude - ?) + ABS(longitude - ?) <= ?`,
-			lat, lon, distance,
-		); err != nil {
-			writeError(w, http.StatusInternalServerError, err)
+		var chairs []*Chair
+		if v, ok := nearByChairsCache.Load("now"); ok {
+			chairs = v.([]*Chair)
+		} else {
+			writeError(w, http.StatusInternalServerError, errors.New("chairs cache is empty"))
 			return
 		}
 	*/
+	chairs := make([]*Chair, 0, 1000)
+	if err := db.Select(
+		&chairs,
+		`SELECT chairs.id, name, model, latitude, longitude FROM chairs
+				WHERE is_active = 1 AND latitude IS NOT NULL
+				AND ABS(latitude - ?) + ABS(longitude - ?) <= ?`,
+		lat, lon, distance,
+	); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
 
 	nearbyChairs := []appGetNearbyChairsResponseChair{}
 	for _, chair := range chairs {
@@ -785,9 +793,9 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		if chair.Latitude == nil || chair.Longitude == nil {
 			continue
 		}
-		if calculateDistance(lat, lon, *chair.Latitude, *chair.Longitude) > distance {
-			continue
-		}
+		//		if calculateDistance(lat, lon, *chair.Latitude, *chair.Longitude) > distance {
+		//			continue
+		//		}
 		nearbyChairs = append(nearbyChairs, appGetNearbyChairsResponseChair{
 			ID:    chair.ID,
 			Name:  chair.Name,

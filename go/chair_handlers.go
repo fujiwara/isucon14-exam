@@ -179,8 +179,20 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 
 	var wg sync.WaitGroup
 	wg.Add(1)
+	ch := make(chan *Ride, 1)
 	go func() {
 		defer wg.Done()
+
+		ride := &Ride{}
+		if r, ok := chairsInRide.Load(chair.ID); ok {
+			ride = r.(*Ride)
+		} else if err := db.Get(ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
+			if !errors.Is(err, sql.ErrNoRows) {
+				slog.Error("failed to get ride", "err", err)
+				return
+			}
+		}
+		ch <- ride
 		if _, err := db.Exec(
 			`UPDATE chairs SET latitude = ?, longitude = ?, total_distance = total_distance + ?, moved_at = ?, updated_at = updated_at WHERE id = ?`,
 			req.Latitude, req.Longitude, distance, now, chair.ID,
@@ -196,16 +208,8 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx2.Rollback()
-	ride := &Ride{}
+	ride := <-ch
 	newStatus := ""
-	if r, ok := chairsInRide.Load(chair.ID); ok {
-		ride = r.(*Ride)
-	} else if err := db.Get(ride, `SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC LIMIT 1`, chair.ID); err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			writeError(w, http.StatusInternalServerError, err)
-			return
-		}
-	}
 	if ride.ID != "" {
 		status, err := getLatestRideStatus(tx2, ride.ID)
 		if err != nil {
@@ -214,11 +218,13 @@ func chairPostCoordinate(w http.ResponseWriter, r *http.Request) {
 		}
 		if status != "COMPLETED" && status != "CANCELED" {
 			if req.Latitude == ride.PickupLatitude && req.Longitude == ride.PickupLongitude && status == "ENROUTE" {
-				rideStatusCache.Store(ride.ID, rideStatus{Status: "PICKUP", UpdatedAt: time.Now()})
+				// rideStatusCache.Store(ride.ID, rideStatus{Status: "PICKUP", UpdatedAt: time.Now()})
+				tx2.Exec("UPDATE ride_status SET status = 'PICKUP' WHERE ride_id = ?", ride.ID)
 				newStatus = "PICKUP"
 			}
 			if req.Latitude == ride.DestinationLatitude && req.Longitude == ride.DestinationLongitude && status == "CARRYING" {
-				rideStatusCache.Store(ride.ID, rideStatus{Status: "ARRIVED", UpdatedAt: time.Now()})
+				// rideStatusCache.Store(ride.ID, rideStatus{Status: "ARRIVED", UpdatedAt: time.Now()})
+				tx2.Exec("UPDATE ride_status SET status = 'ARRIVED' WHERE ride_id = ?", ride.ID)
 				newStatus = "ARRIVED"
 			}
 		}
@@ -288,11 +294,12 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 	switch req.Status {
 	// Acknowledge the ride
 	case "ENROUTE":
-		rideStatusCache.Store(ride.ID, rideStatus{Status: "ENROUTE", UpdatedAt: time.Now()})
+		// rideStatusCache.Store(ride.ID, rideStatus{Status: "ENROUTE", UpdatedAt: time.Now()})
+		db2.Exec("UPDATE ride_status SET status = 'ENROUTE' WHERE ride_id = ?", ride.ID)
 		newStatus = "ENROUTE"
 	// After Picking up user
 	case "CARRYING":
-		status, err := getLatestRideStatus(nil, ride.ID)
+		status, err := getLatestRideStatus(db2, ride.ID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
@@ -301,7 +308,8 @@ func chairPostRideStatus(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("chair has not arrived yet"))
 			return
 		}
-		rideStatusCache.Store(ride.ID, rideStatus{Status: "CARRYING", UpdatedAt: time.Now()})
+		// rideStatusCache.Store(ride.ID, rideStatus{Status: "CARRYING", UpdatedAt: time.Now()})
+		db2.Exec("UPDATE ride_status SET status = 'CARRYING' WHERE ride_id = ?", ride.ID)
 		newStatus = "CARRYING"
 	default:
 		writeError(w, http.StatusBadRequest, errors.New("invalid status"))
@@ -379,10 +387,6 @@ func chairGetNotificationSSE(w http.ResponseWriter, r *http.Request) {
 			usersMinimalCache.Store(ride.UserID, user)
 		}
 
-		if status == "COMPLETED" {
-			chairsInRide.Delete(chair.ID)
-		}
-
 		if err := writeSSE(w, &chairGetNotificationResponseData{
 			RideID: ride.ID,
 			User: simpleUser{
@@ -403,6 +407,9 @@ func chairGetNotificationSSE(w http.ResponseWriter, r *http.Request) {
 		}
 		lastRide = ride
 		lastRideStatus = status
+		if status == "COMPLETED" {
+			chairsInRide.Delete(chair.ID)
+		}
 		return true, nil
 	}
 
