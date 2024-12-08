@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"math"
 	"net/http"
 	"sort"
 	"sync"
@@ -69,15 +70,15 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			var score float64
 			// pickupDistanceは少ないほどよい
 			if pickupDistance == 0 {
-				score += 25
+				score += 250
 			} else {
-				score += 25 / float64(pickupDistance)
+				score += 250 / float64(pickupDistance)
 			}
-			// destinationDistanceは多いほどよい
-			//		score += float64(destinationDistance) / 10
+			//destinationDistanceは多いほどよい
+			// score += float64(destinationDistance) / 10
+
 			// ageが古いやつから優先
 			score += 10 * age
-			// score *= float64(chair.Speed) // 速いやつをどんどん使うパターaン
 
 			if age > 20 {
 				score += 10000 // 最優先
@@ -124,7 +125,8 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 	}
 
 	matchedCount := 0
-	for _, chunk := range lo.Chunk(comletedMatchings, 20) {
+	var maxAge float64
+	for _, chunk := range lo.Chunk(comletedMatchings, 40) {
 		notifies := map[string]notify{}
 		tx, err := db.Beginx()
 		if err != nil {
@@ -132,12 +134,14 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, m := range chunk {
-			slog.Info("matched", "score", m.Score, "pd", m.PD, "dd", m.DD, "age", m.Age, "speed", m.Speed)
+			maxAge = math.Max(maxAge, m.Age)
+			slog.Debug("matched", "score", m.Score, "pd", m.PD, "dd", m.DD, "age", m.Age, "speed", m.Speed)
 			if _, err := db.Exec("UPDATE rides SET chair_id = ? WHERE id = ?", m.Chair.ID, m.Ride.ID); err != nil {
 				writeError(w, http.StatusInternalServerError, err)
 				return
 			}
 			notifies[m.Chair.ID] = notify{Ride: m.Ride, Status: "MATCHING"}
+			m.Ride.ChairID = sql.NullString{String: m.Chair.ID, Valid: true}
 			matchedCount++
 		}
 		tx.Commit()
@@ -150,6 +154,7 @@ func internalGetMatching(w http.ResponseWriter, r *http.Request) {
 		//	break
 		//}
 	}
-	slog.Info("count", "matched", matchedCount, "remaining", len(rides)-matchedCount)
+	avgAge := maxAge / float64(len(comletedMatchings))
+	slog.Info("count", "matched", matchedCount, "remaining", len(rides)-matchedCount, "max_age", maxAge, "avg_age", avgAge)
 	w.WriteHeader(http.StatusNoContent)
 }

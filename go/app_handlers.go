@@ -548,8 +548,12 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if status == "COMPLETED" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("already completed status=%s ride_id=%s", status, rideID))
+		return
+	}
 	if status != "ARRIVED" {
-		writeError(w, http.StatusBadRequest, errors.New("not arrived yet"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("not arrived yet status=%s ride_id=%s", status, rideID))
 		return
 	}
 
@@ -633,6 +637,7 @@ func appPostRideEvaluatation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	chairsInRide.Delete(ride.ChairID.String)
+	slog.Info("ride completed", "ride_id", rideID)
 	sendNotificationSSE(ride.ChairID.String, ride, "COMPLETED")
 	sendNotificationSSEApp(ride.UserID, ride, "COMPLETED")
 
@@ -674,44 +679,17 @@ func getChairStats(tx *sqlx.Tx, tx2 *sqlx.Tx, chairID string) (appGetNotificatio
 	rides := []Ride{}
 	err := tx.Select(
 		&rides,
-		`SELECT * FROM rides WHERE chair_id = ? ORDER BY updated_at DESC`,
+		`SELECT * FROM rides WHERE chair_id = ? AND evaluation IS NOT NULL ORDER BY updated_at DESC`,
 		chairID,
 	)
 	if err != nil {
 		return stats, err
 	}
 
-	totalRideCount := len(rides)
+	totalRideCount := 0
 	totalEvaluation := 0.0
 	for _, ride := range rides {
-		rideStatuses := []RideStatus{}
-		if v, ok := rideStatusCache.Load(ride.ID); ok {
-			status := v.(rideStatus)
-			rideStatuses = append(rideStatuses, RideStatus{
-				RideID:    status.RideID,
-				Status:    status.Status,
-				CreatedAt: status.UpdatedAt,
-			})
-		}
-		var arrivedAt, pickupedAt *time.Time
-		var isCompleted bool
-		for _, status := range rideStatuses {
-			if status.Status == "ARRIVED" {
-				arrivedAt = &status.CreatedAt
-			} else if status.Status == "CARRYING" {
-				pickupedAt = &status.CreatedAt
-			}
-			if status.Status == "COMPLETED" {
-				isCompleted = true
-			}
-		}
-		if arrivedAt == nil || pickupedAt == nil {
-			continue
-		}
-		if !isCompleted {
-			continue
-		}
-
+		totalRideCount++
 		totalEvaluation += float64(*ride.Evaluation)
 	}
 
@@ -765,6 +743,7 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	retrievedAt := time.Now()
 	chairs := []struct {
 		Chair
 		RideID sql.NullString `db:"ride_id"`
@@ -799,7 +778,6 @@ func appGetNearbyChairs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	retrievedAt := time.Now()
 	writeJSON(w, http.StatusOK, &appGetNearbyChairsResponse{
 		Chairs:      nearbyChairs,
 		RetrievedAt: retrievedAt.UnixMilli(),
@@ -865,6 +843,10 @@ func sendNotificationSSEApp(userID string, ride *Ride, status string) {
 	}
 	if status == "" {
 		panic("status is empty")
+	}
+	if !ride.ChairID.Valid {
+		slog.Warn("chairID is invalid", "ride", *ride, "status", status)
+		return
 	}
 	_ch, _ := appChannels.LoadOrStore(userID, make(chan notify, chanSize))
 	ch := _ch.(chan notify)
